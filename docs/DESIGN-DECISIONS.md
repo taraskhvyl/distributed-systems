@@ -107,6 +107,7 @@ re-enqueues a `file.uploaded` on the retry topic (`reap_expired` in
 concurrent reapers never double-enqueue. The cost is that a worker that is *slow* rather
 than dead loses its lease and the job runs twice. That's harmless here because outputs
 are deterministic, but a system with side effects would need fencing tokens.
+Rejected alternatives: [ADR-0001](adr/0001-processing-claims-are-leases.md).
 
 Honest gap: the retry topic has no backoff delay — a proper version uses wait-planes
 (topics with time-delayed consumption) or a scheduled retry.

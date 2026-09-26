@@ -14,6 +14,12 @@ Whenever you add, change, or remove something, explain it to the user in your re
 Keep it short and concrete. Point at `file:line`, and don't lecture.
 When a change affects a documented design decision, update `docs/DESIGN-DECISIONS.md` too.
 
+## Roadmap
+
+Work follows `docs/ROADMAP.md` in order. Before each experiment, ask the user for their
+prediction. Tick an item only when it has been run **and** its Q&A entry exists in
+`docs/DESIGN-DECISIONS.md`.
+
 ## Commands
 
 ```bash
@@ -48,3 +54,5 @@ There is no unit test suite. `make demo` asserts every flow.
 - The processor DB role only has `SELECT, UPDATE` on `files`. It cannot write the outbox.
 - Networks: the gateway is on `edge` only and cannot reach postgres/kafka/redis. Keep it that way.
 - Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS). Keep them in sync with the code.
+- `docs/adr/` records decisions that are hard to reverse, surprising, and a real trade-off.
+  Read the relevant ADR before "fixing" something that looks odd.
