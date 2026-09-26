@@ -1,0 +1,9 @@
+# Build context is the repo root (npm workspaces). Keep secrets and local artifacts out of images.
+.env
+.git
+.venv
+**/node_modules
+**/dist
+gateway/certs
+demo
+docs

@@ -1,5 +1,14 @@
 name: mediashare
 
+# Shared values, defined once and referenced below (YAML anchors).
+x-web-origin: &web-origin https://app.localhost
+
+# Token verification settings for every service that checks Keycloak JWTs.
+x-auth-env: &auth-env
+  AUTH_ISSUER: https://auth.localhost/realms/media
+  AUTH_JWKS_URL: http://keycloak:8080/realms/media/protocol/openid-connect/certs
+  WEB_ORIGIN: *web-origin
+
 networks:
   edge:
     name: mediashare-edge
@@ -94,6 +103,7 @@ services:
       - weeddata:/data
     environment:
       S3_EXTERNAL_URL: https://s3.localhost
+      WEB_ORIGIN: *web-origin
       S3_ADMIN_ACCESS_KEY: ${S3_ADMIN_ACCESS_KEY:?}
       S3_ADMIN_SECRET_KEY: ${S3_ADMIN_SECRET_KEY:?}
       S3_API_ACCESS_KEY: ${S3_API_ACCESS_KEY:?}
@@ -113,7 +123,7 @@ services:
         EOF
         # -s3.allowedOrigins: CORS for browser uploads (presigned PUT from app.localhost).
         # The default "*" reflects ANY Origin; AWS S3 (no bucket CORS rule) rejects every preflight.
-        exec weed mini -dir=/data -bucket=media-uploads,media-thumbnails -s3.config=/tmp/s3-identities.json -s3.allowedOrigins=https://app.localhost
+        exec weed mini -dir=/data -bucket=media-uploads,media-thumbnails -s3.config=/tmp/s3-identities.json -s3.allowedOrigins="$$WEB_ORIGIN"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9333/ || exit 1"]
       interval: 5s
@@ -142,16 +152,17 @@ services:
     restart: unless-stopped
 
   api:
-    build: ./services/api
+    build:
+      context: .
+      dockerfile: services/node.Dockerfile
+      args: { SERVICE: api }
     networks: [edge, data]
     environment:
       PORT: "3000"
       DATABASE_URL: postgres://api_user:${API_DB_PASSWORD:?}@postgres:5432/mediashare
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379
       KAFKA_BROKERS: kafka:9092
-      AUTH_ISSUER: https://auth.localhost/realms/media
-      AUTH_JWKS_URL: http://keycloak:8080/realms/media/protocol/openid-connect/certs
-      WEB_ORIGIN: https://app.localhost
+      <<: *auth-env
       S3_ENDPOINT_INTERNAL: http://storage:8333
       S3_ENDPOINT_PUBLIC: https://s3.localhost
       S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?}
@@ -204,7 +215,10 @@ services:
     restart: unless-stopped
 
   notifier:
-    build: ./services/notifier
+    build:
+      context: .
+      dockerfile: services/node.Dockerfile
+      args: { SERVICE: notifier }
     networks: [data]
     environment:
       KAFKA_BROKERS: kafka:9092

@@ -1,0 +1,19 @@
+{
+  "name": "@mediashare/auth",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local verification of Keycloak access tokens, shared by api and notifier",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "^6.0.3"
+  }
+}
