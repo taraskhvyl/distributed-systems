@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   aggregate_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
   payload JSONB NOT NULL,
+  -- W3C trace context of the request that wrote the row. The relay publishes later from a
+  -- timer with no request context, so the trace must travel with the data. NULL = no trace.
+  traceparent TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at TIMESTAMPTZ
 );
