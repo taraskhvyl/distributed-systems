@@ -14,6 +14,8 @@ export interface TokenVerifierOptions {
 
 export interface AuthenticatedUser {
   id: string
+  /** Keycloak `preferred_username`; the api mirrors it into its `users` table. */
+  username: string
   roles: string[]
   /** Token expiry, epoch seconds. Long-lived connections must end by then. */
   expiresAt: number
@@ -49,12 +51,13 @@ export function createTokenVerifier({ issuer, jwksUrl }: TokenVerifierOptions) {
     try {
       const { payload } = await jwtVerify(token, jwks, {
         issuer,
-        requiredClaims: ['exp', 'iat', 'iss', 'sub'],
+        requiredClaims: ['exp', 'iat', 'iss', 'sub', 'preferred_username'],
         clockTolerance: CLOCK_TOLERANCE_S,
       })
       const realmAccess = payload.realm_access as { roles?: string[] } | undefined
       return {
         id: payload.sub as string,
+        username: payload.preferred_username as string,
         roles: realmAccess?.roles ?? [],
         expiresAt: payload.exp as number,
       }

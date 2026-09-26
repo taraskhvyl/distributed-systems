@@ -43,7 +43,7 @@ async function main() {
     req.log.error({ err }, 'unhandled error')
     if (err.validation) {
       return reply.code(400).send({
-        error: { code: 'bad_request', message: 'Request body failed validation' },
+        error: { code: 'bad_request', message: err.message },
       })
     }
     return reply.code(500).send({ error: { code: 'internal', message: 'Internal server error' } })
@@ -54,7 +54,7 @@ async function main() {
   // (a preflight never carries the token, it only asks whether sending one is allowed).
   await app.register(cors, {
     origin: config.webOrigin, // one exact origin, never '*' together with credentials
-    methods: ['GET', 'POST', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
     exposedHeaders: ['Retry-After'], // otherwise JS can't read it on a 429
     maxAge: 600, // browser caches the preflight for 10 min instead of doubling every request

@@ -10,11 +10,15 @@ const verifyAuthorizationHeader = createTokenVerifier({
 export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   try {
     const user = await verifyAuthorizationHeader(req.headers.authorization)
-    req.user = { id: user.id, roles: user.roles }
+    req.user = { id: user.id, username: user.username, roles: user.roles }
   } catch (err) {
     if (!(err instanceof AuthError)) throw err
     return reply.code(401).send({ error: { code: err.code, message: err.message } })
   }
+}
+
+export function isAdmin(user: { roles: string[] }): boolean {
+  return user.roles.includes('admin')
 }
 
 export function requireRole(role: string) {

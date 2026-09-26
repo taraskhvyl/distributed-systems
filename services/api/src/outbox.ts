@@ -1,6 +1,25 @@
+import crypto from 'node:crypto'
 import { Producer } from 'kafkajs'
-import { Pool } from 'pg'
+import { Pool, PoolClient } from 'pg'
 import { FastifyBaseLogger } from 'fastify'
+
+/**
+ * Transactional outbox: call inside the transaction that makes the change, so the event
+ * exists if and only if the change committed. The relay below publishes it later.
+ * `aggregateId` becomes the Kafka key, so events for one file stay ordered.
+ */
+export async function insertOutboxEvent(
+  client: PoolClient,
+  eventType: string,
+  aggregateId: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO outbox_events (event_id, aggregate_id, event_type, payload)
+     VALUES ($1, $2, $3, $4::jsonb)`,
+    [crypto.randomUUID(), aggregateId, eventType, JSON.stringify(payload)],
+  )
+}
 
 export function startOutboxRelay(
   pool: Pool,

@@ -1,3 +1,4 @@
+import { FastifyReply, FastifyRequest } from 'fastify'
 import { Redis } from 'ioredis'
 import { config } from './config.js'
 
@@ -11,6 +12,10 @@ declare module 'ioredis' {
     ): Promise<number>
   }
 }
+
+// Safe methods (RFC 9110) don't change state, so they don't cost a token.
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+const RETRY_AFTER_SECONDS = '10'
 
 const redis = new Redis(config.redisUrl, {
   lazyConnect: true,
@@ -50,7 +55,7 @@ export async function redisPing(): Promise<void> {
   if (reply !== 'PONG') throw new Error('redis ping failed')
 }
 
-export async function allowMutation(userId: string): Promise<boolean> {
+async function allowMutation(userId: string): Promise<boolean> {
   try {
     const allowed = (await redis.tokenBucket(
       `rl:mutate:${userId}`,
@@ -62,4 +67,15 @@ export async function allowMutation(userId: string): Promise<boolean> {
   } catch {
     return true
   }
+}
+
+/** Hook: one token per state-changing request (POST, PUT, PATCH, DELETE), per user. */
+export async function rateLimitMutations(req: FastifyRequest, reply: FastifyReply) {
+  if (SAFE_METHODS.has(req.method)) return
+  const allowed = await allowMutation(req.user!.id)
+  if (allowed) return
+  reply.header('Retry-After', RETRY_AFTER_SECONDS)
+  return reply.code(429).send({
+    error: { code: 'rate_limited', message: 'Too many mutating requests, slow down' },
+  })
 }

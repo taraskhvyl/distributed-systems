@@ -54,6 +54,18 @@
       "realmRoles": ["user"]
     },
     {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@localhost",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "User",
+      "credentials": [
+        { "type": "password", "value": "alice-pass", "temporary": false }
+      ],
+      "realmRoles": ["user"]
+    },
+    {
       "username": "admin",
       "enabled": true,
       "email": "admin@localhost",

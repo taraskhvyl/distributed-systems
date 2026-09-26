@@ -88,6 +88,25 @@ def wait_for_final_status(token, base, file_id, timeout=90):
     raise TimeoutError(f"file {file_id} did not reach a final state within {timeout}s")
 
 
+def upload_and_process(token, base, path, content_type):
+    """Register, upload directly to S3, complete, and wait for the pipeline. Returns (id, status)."""
+    data = path.read_bytes()
+    resp = api_retry(token, base, "POST", "/v1/files", json={
+        "filename": path.name,
+        "contentType": content_type,
+        "sizeBytes": len(data),
+    })
+    resp.raise_for_status()
+    created = resp.json()
+    file_id = created["file"]["id"]
+    put = requests.put(created["uploadUrl"], data=data, headers={"Content-Type": content_type}, verify=False, timeout=60)
+    put.raise_for_status()
+    resp = api_retry(token, base, "POST", f"/v1/files/{file_id}/complete")
+    resp.raise_for_status()
+    status, _ = wait_for_final_status(token, base, file_id)
+    return file_id, status
+
+
 SSE_CONNECT_TIMEOUT_S = 10
 SSE_EVENT_TIMEOUT_S = 10
 
@@ -121,6 +140,71 @@ def wait_for_event(events, event_type, file_id, timeout=SSE_EVENT_TIMEOUT_S):
     return None
 
 
+def social_demo(args, demo_token, file_path, content_type):
+    """Phase 1b: visibility, follow, feed, idempotent likes with a live notification."""
+    base = args.api_base
+    alice_token = get_token(args.auth_base, args.alice_username, args.alice_password)
+
+    step(15, "alice uploads a file; it is private by default, so demo gets 404 (not 403)")
+    alice_file_id, status = upload_and_process(alice_token, base, file_path, content_type)
+    assert status == "ready", f"alice's file ended {status}"
+    resp = api(demo_token, base, "GET", f"/v1/files/{alice_file_id}")
+    print(f"    demo GET alice's private file: HTTP {resp.status_code} (expected 404: existence is not revealed)")
+    assert resp.status_code == 404
+
+    step(16, "alice makes it public -> it is a Published file (public AND ready)")
+    resp = api_retry(alice_token, base, "PATCH", f"/v1/files/{alice_file_id}", json={"visibility": "public"})
+    show(resp, ["file"])
+    assert resp.status_code == 200 and resp.json()["file"]["visibility"] == "public"
+    resp = api(demo_token, base, "GET", f"/v1/files/{alice_file_id}")
+    public_view = resp.json()["file"]
+    print(f"    demo now sees: HTTP {resp.status_code}, fields = {sorted(public_view)}")
+    assert resp.status_code == 200 and "status" not in public_view, "non-owners get the narrow public view"
+
+    step(17, "demo finds alice, follows her (twice: PUT is idempotent), and sees her file in the feed")
+    resp = api(demo_token, base, "GET", "/v1/users?q=ali")
+    print(f"    search 'ali': {resp.json()['users']}")
+    assert any(u["username"] == args.alice_username for u in resp.json()["users"])
+    for attempt in (1, 2):
+        resp = api_retry(demo_token, base, "PUT", f"/v1/users/{args.alice_username}/follow")
+        print(f"    follow attempt {attempt}: HTTP {resp.status_code} {resp.json()}")
+        assert resp.status_code == 200
+    resp = api_retry(demo_token, base, "PUT", f"/v1/users/{args.username}/follow")
+    print(f"    follow yourself: HTTP {resp.status_code} (expected 400)")
+    assert resp.status_code == 400
+    profile = api(demo_token, base, "GET", f"/v1/users/{args.alice_username}").json()["user"]
+    print(f"    alice's profile: {profile}")
+    assert profile["followers"] == 1 and profile["followedByMe"]
+    feed = api(demo_token, base, "GET", "/v1/feed").json()
+    print(f"    demo's feed: {[(f['ownerUsername'], f['filename']) for f in feed['files']]}")
+    assert any(f["id"] == alice_file_id for f in feed["files"])
+
+    step(18, "demo likes it twice -> like_count 1, and alice gets exactly ONE live notification")
+    alice_events = open_event_stream(alice_token, base)
+    for attempt in (1, 2):
+        resp = api_retry(demo_token, base, "PUT", f"/v1/files/{alice_file_id}/like")
+        print(f"    like attempt {attempt}: HTTP {resp.status_code} {resp.json()}")
+        assert resp.status_code == 200 and resp.json()["likeCount"] == 1
+    liked_event = wait_for_event(alice_events, "file.liked", alice_file_id)
+    assert liked_event, "no file.liked event reached alice over SSE"
+    print(f"    alice received: {liked_event['message']}")
+    time.sleep(2)  # give a (wrong) duplicate event time to arrive before counting
+    liked_count = sum(1 for e in alice_events if e.get("eventType") == "file.liked")
+    print(f"    file.liked events received by alice: {liked_count} (expected 1)")
+    assert liked_count == 1
+    resp = api_retry(demo_token, base, "DELETE", f"/v1/files/{alice_file_id}/like")
+    print(f"    unlike: HTTP {resp.status_code} {resp.json()}")
+    assert resp.json()["likeCount"] == 0
+
+    step(19, "alice makes it private again -> gone from demo's feed, 404 again")
+    api_retry(alice_token, base, "PATCH", f"/v1/files/{alice_file_id}", json={"visibility": "private"}).raise_for_status()
+    feed = api(demo_token, base, "GET", "/v1/feed").json()
+    assert all(f["id"] != alice_file_id for f in feed["files"])
+    resp = api(demo_token, base, "GET", f"/v1/files/{alice_file_id}")
+    print(f"    feed size now {len(feed['files'])}, demo GET: HTTP {resp.status_code} (expected 404)")
+    assert resp.status_code == 404
+
+
 def main():
     parser = argparse.ArgumentParser(description="mediashare end-to-end demo")
     parser.add_argument("--auth-base", default="https://auth.localhost")
@@ -129,12 +213,15 @@ def main():
     parser.add_argument("--infected-file", default=str(HERE / "samples" / "infected.txt"))
     parser.add_argument("--username", default="demo")
     parser.add_argument("--password", default="demo-pass")
+    parser.add_argument("--alice-username", default="alice")
+    parser.add_argument("--alice-password", default="alice-pass")
     parser.add_argument("--admin-username", default="admin")
     parser.add_argument("--admin-password", default="admin-pass")
     parser.add_argument("--skip-upload", action="store_true")
     parser.add_argument("--skip-infected", action="store_true")
     parser.add_argument("--skip-rate-limit", action="store_true")
     parser.add_argument("--skip-admin", action="store_true")
+    parser.add_argument("--skip-social", action="store_true")
     args = parser.parse_args()
 
     file_path = Path(args.file)
@@ -241,21 +328,9 @@ def main():
         step(10, "upload an 'infected' file (processor must reject + purge it)")
         inf_path = Path(args.infected_file)
         if inf_path.exists():
-            inf_bytes = inf_path.read_bytes()
-            resp = api_retry(token, args.api_base, "POST", "/v1/files", json={
-                "filename": inf_path.name,
-                "contentType": "text/plain",
-                "sizeBytes": len(inf_bytes),
-            })
-            resp.raise_for_status()
-            inf = resp.json()
-            put = requests.put(inf["uploadUrl"], data=inf_bytes, headers={"Content-Type": "text/plain"}, verify=False, timeout=30)
-            put.raise_for_status()
-            resp = api_retry(token, args.api_base, "POST", f"/v1/files/{inf['file']['id']}/complete")
-            resp.raise_for_status()
-            inf_status, _ = wait_for_final_status(token, args.api_base, inf["file"]["id"])
+            inf_id, inf_status = upload_and_process(token, args.api_base, inf_path, "text/plain")
             print(f"    infected-file final status: {inf_status} (expected infected)")
-            resp = api(token, args.api_base, "POST", f"/v1/files/{inf['file']['id']}/download-url")
+            resp = api(token, args.api_base, "POST", f"/v1/files/{inf_id}/download-url")
             print(f"    download attempt for infected file: HTTP {resp.status_code} (expected 403 blocked)")
             assert inf_status == "infected" and resp.status_code == 403
 
@@ -313,6 +388,9 @@ def main():
     resp = api(token, args.api_base, "GET", "/v1/files?limit=10")
     files = resp.json()["files"]
     print(f"    {len(files)} file(s): " + ", ".join(f"{f['filename']}={f['status']}" for f in files))
+
+    if not args.skip_social:
+        social_demo(args, token, file_path, content_type)
 
     print("\nDemo finished successfully.")
     print("Watch the pipeline live:  make logs")
