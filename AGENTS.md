@@ -76,8 +76,11 @@ There is no unit test suite. `make demo` asserts every flow.
 - `services/notifier`: Node consumer (separate consumer group) + SSE endpoint
   `GET /v1/events` for the browser (`src/events-server.ts`, `src/stream-registry.ts`).
 - `packages/auth`: shared JWT verification (`@mediashare/auth`), used by api and notifier.
-  Node services are npm workspaces built by one `services/node.Dockerfile` from the repo
-  root (build context `.`; `.dockerignore` keeps `.env` and certs out).
+  Node services are a pnpm workspace (`pnpm-workspace.yaml`; shared package referenced as
+  `workspace:*`) built by one two-stage `services/node.Dockerfile` from the repo root
+  (build context `.`; `.dockerignore` keeps `.env` and certs out). Adding a dependency:
+  `pnpm --filter <service> add <pkg>`, then commit `pnpm-lock.yaml` (the image build uses
+  `--frozen-lockfile` and fails on a stale lockfile).
 - `web/`: static browser app (`app.localhost`), native ES modules in `web/js/`, no build step.
 - `gateway/nginx.conf`: TLS, host routing, per-IP rate limit, CSP for the web app.
 - `db/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need

@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=24"
   },
@@ -11,7 +14,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@mediashare/auth": "1.0.0",
+    "@mediashare/auth": "workspace:*",
     "kafkajs": "^2.2.4",
     "pino": "^10.3.1"
   },

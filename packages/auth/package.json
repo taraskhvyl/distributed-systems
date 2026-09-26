@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "Local verification of Keycloak access tokens, shared by api and notifier",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

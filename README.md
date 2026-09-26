@@ -125,7 +125,11 @@ db/init/             schema + roles              keycloak/           realm impor
 demo/                end-to-end client           docs/               architecture, security, Q&A
 ```
 
-Node services are npm workspaces built by one `services/node.Dockerfile` from the repo root.
+Node services are a **pnpm workspace** (`pnpm-workspace.yaml`, lockfile `pnpm-lock.yaml`), built
+by one two-stage `services/node.Dockerfile` from the repo root: the build stage installs with
+`--frozen-lockfile` and compiles, then `pnpm deploy --prod` writes just the service's `dist/`
+and production dependencies for the runtime image. For editor types locally: `pnpm install`
+(pnpm is pinned in `package.json` → `packageManager`; `corepack enable` provides it).
 
 ## Exploring the running system
 

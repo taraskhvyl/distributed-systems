@@ -1,0 +1,14 @@
+# pnpm workspace: shared packages/* used by the Node services.
+packages:
+  - packages/*
+  - services/api
+  - services/notifier
+
+# Workspace deps are copied into dependents (not symlinked), so `pnpm deploy` can produce a
+# self-contained folder per service for its Docker image.
+injectWorkspacePackages: true
+
+minimumReleaseAgeExclude:
+  - '@aws-sdk/client-s3@3.1141.0'
+  - '@aws-sdk/s3-request-presigner@3.1141.0'
+  - '@types/node@24.19.0'

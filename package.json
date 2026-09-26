@@ -1,6 +1,6 @@
 {
   "name": "mediashare",
   "private": true,
-  "description": "npm workspaces: shared packages/* used by the Node services",
-  "workspaces": ["packages/*", "services/api", "services/notifier"]
+  "description": "pnpm workspace root (see pnpm-workspace.yaml)",
+  "packageManager": "pnpm@12.5.1"
 }
