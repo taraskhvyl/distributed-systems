@@ -41,7 +41,7 @@ Common follow-up questions:
 
 **A:** You can't reliably do "UPDATE row, then publish" or the reverse — either order has
 a crash window that strands one side. So `complete` commits *both* the state change and
-an event row in one postgres transaction (`services/api/src/routes.ts`, `withTransaction`),
+an event row in one postgres transaction (`services/api/src/file-routes.ts`, `withTransaction`; helper `insertOutboxEvent` in `outbox.ts`),
 and a relay publishes rows where `published_at IS NULL`
 (`services/api/src/outbox.ts`). That's the **transactional outbox pattern**.
 
@@ -59,7 +59,7 @@ Details worth knowing:
 
 1. **API idempotency key** — `POST /v1/files` accepts an `Idempotency-Key`; a partial
    unique index `(owner_id, idempotency_key)` + `ON CONFLICT DO NOTHING` makes retries
-   return the original file instead of creating twins (`services/api/src/routes.ts`).
+   return the original file instead of creating twins (`services/api/src/file-routes.ts`).
    The demo's step 4 replays the key and gets the same id back.
 2. **Consumer claim (compare-and-set)** — the processor's first action is
    `UPDATE files SET status='processing' WHERE id=$1 AND status='uploaded'`
@@ -166,8 +166,13 @@ a request without a challenge gets `invalid_request`.
 Follow-ups:
 - *"Where do tokens live?"* In a JS variable only. `localStorage` survives forever and any
   XSS can read it; memory limits theft to the XSS's lifetime. The strict CSP on
-  `app.localhost` (`gateway/nginx.conf`) is the XSS mitigation. Cost: a reload means a
-  (silent, SSO-cookie) round trip through Keycloak.
+  `app.localhost` (`gateway/nginx.conf`) is the XSS mitigation. Cost: a reload loses the
+  tokens, so the app does a **silent login** on load: the same PKCE redirect with
+  `prompt=none` ("only if you already know me, never show a form"). With a Keycloak SSO
+  cookie it comes straight back with a code; without one, `error=login_required` and the
+  Log in button appears. A load that *is* a callback never starts another silent login
+  (no redirect loop). The alternatives: a refresh token in `sessionStorage` (XSS can
+  steal it) or a BFF with an `HttpOnly` cookie (the production answer, one more service).
 - *"How do you refresh?"* Lazily, 30 s before expiry, at the moment a token is needed
   (`accessToken()`), with one shared in-flight refresh. Timers are unreliable: background
   tabs throttle them and laptops sleep.
@@ -255,16 +260,96 @@ Follow-ups:
   `EventSource` work, and a separate SSE gateway without Kafka credentials shrinks the
   internet-facing surface (see SECURITY.md, "Notifier edge exposure").
 
+## Q: How is the feed built? Fan-out on read vs fan-out on write?
+
+**A:** **Fan-out on read.** Nothing is precomputed. `GET /v1/feed` runs one query:
+follows ⨝ files (Published only) ⨝ users, newest first, `LIMIT 20`
+(`readFeed` in `services/api/src/social-routes.ts`). A partial index
+`files (owner_id, created_at DESC, id DESC) WHERE visibility='public' AND status='ready'`
+serves the per-author lookup.
+
+| | fan-out on **read** (ours) | fan-out on **write** |
+|---|---|---|
+| on new post | nothing | copy the post id into every follower's feed (a Redis list or `feed_items` table) |
+| on feed read | join over everyone you follow, sort, take 20 | read your precomputed list, done |
+| cost grows with | people **you follow** × their posts, on **every read** | followers of the **author**, once per post |
+| freshness | always exact (unpublish = gone instantly) | eventually consistent; unpublish/unfollow must clean up copies |
+| breaks at | users following thousands of people | celebrities with millions of followers (one post = millions of writes) |
+
+Measured (`scripts/experiment-feed-plan.sh`; 1000 authors × 20 Published files + 50k
+private): following 3 users → nested loop over the partial index, 60 rows read,
+**0.5 ms**. Following 1000 → the planner switches to a Seq Scan over all 20,000 Published
+files + hash join, **27 ms**, to return 20 rows. The work is proportional to what you follow,
+not to what you see.
+
+Follow-ups:
+- *"What do real systems do?"* **Hybrid**: fan-out on write for normal authors, fan-out on
+  read merged in at read time for celebrities (Twitter's classic design). Roadmap Phase 3.
+- *"Pagination?"* **Keyset**, not OFFSET: the cursor is the last row's `(created_at, id)`;
+  the next page is `WHERE (created_at, id) < (cursor)`. New posts don't shift pages and deep
+  pages cost the same as the first. The cursor carries `created_at` as Postgres text,
+  because a JS `Date` keeps milliseconds and Postgres stores microseconds: a truncated
+  cursor would repeat or skip rows.
+- *"Anything else wrong in that plan?"* `liked_by_me` (an `EXISTS` per row) runs for every
+  candidate row (`SubPlan loops=20000`), not only the 20 returned: Postgres computes it
+  before the sort. Fix: compute it in an outer query over the page. Not done yet.
+- Ordering is by upload time, so a file published a week after upload appears a week deep.
+  A `published_at` column would fix it.
+
+## Q: How are likes idempotent, and why can't the count drift?
+
+**A:** A like is a **state**, not an action, so the api exposes it as
+`PUT /v1/files/:id/like` (on) and `DELETE` (off). Both are idempotent: repeating them
+changes nothing, so a retry after a timeout is safe with no Idempotency-Key.
+(`POST /like` as a toggle would not be: a retried request would undo the first.)
+
+One transaction (`likeFile` in `services/api/src/social-routes.ts`):
+1. `SELECT … FOR UPDATE` the file, and only if it's Published (else 404).
+2. `INSERT INTO likes … ON CONFLICT DO NOTHING RETURNING 1`. The `(user_id, file_id)`
+   primary key does the deduplication, not application code.
+3. **Only if a row was inserted**: `UPDATE files SET like_count = like_count + 1` and write
+   the `file.liked` outbox row. A second like inserts nothing, so no second count and no
+   second notification.
+
+`like_count` is a **denormalized** copy of `count(*) FROM likes`: fast to read (the feed
+shows it for every file), but it must be kept in step with the rows. Two ways to break that:
+- **Lost update**: read the count into Node, write back `count + 1`. Measured
+  (`scripts/experiment-like-race.sh`, 50 concurrent likers): **atomic `like_count + 1` →
+  50; read-modify-write → 10**, while `likes` holds 50 rows. Under READ COMMITTED many
+  sessions read the same value and each writes back value + 1.
+- **Count without row, or row without count**: fixed by doing both in one transaction.
+
+Follow-ups:
+- *"Why FOR UPDATE and not FOR SHARE?"* Two transactions holding a share lock that both
+  then UPDATE the row wait for each other: a deadlock. Take the lock you'll need.
+- *"Hot rows?"* Every like on one file serializes on that file's row lock. A viral file
+  (thousands of likes/s) bottlenecks there. Fixes: sharded counters (N rows, sum on read),
+  or append likes and aggregate the count asynchronously.
+- *"Duplicate notifications?"* Like → unlike → like sends two. Accepted. The outbox and
+  Kafka are at-least-once, so the notifier may also see an event twice; for a
+  notification that's harmless.
+- *"Rate limiting?"* Likes cost a token like any write; a sixth rapid like gets 429 (the
+  demo shows it). A social app would give likes their own, larger bucket.
+
 ## Q: How would you rate-limit this? 
 
 **A:** Two layers, different keys, different failure domains: nginx per-IP (10 r/s,
-dumb and early) and Redis per-user token bucket (capacity 5, 0.5/s refill) on mutating
-routes only. The bucket math is one **Lua script** — atomic, so concurrent requests can't
+dumb and early) and Redis per-user token bucket (capacity 5, 0.5/s refill) on every
+state-changing request (anything but GET/HEAD/OPTIONS, so likes and follows count too). The bucket math is one **Lua script** — atomic, so concurrent requests can't
 both spend the last token (the naive GET/SET race). 429s carry `Retry-After`, and the
 demo client honors it — rate limiting is a protocol between server and client, not just
 a wall. Design trade-off: the Redis layer **fails open** if Redis dies (nginx
 still holds the perimeter); strictness vs availability is a per-system decision.
 Run `make demo` step 11: 3 accepted, 9 rate-limited.
+
+Lesson from 1b: the browser showed only `Failed to fetch`. The cause was nginx's per-IP
+limit, which also covered the web app's static files. One login (Keycloak pages, ~10 ES
+modules, token, files, feed) drained the bucket, and Docker Desktop makes every local
+client the same IP. **An nginx 429 has no CORS headers, so the browser hides it from JS**:
+a rate limit looks like a network error. Fixes: no `limit_req` on static files (nothing
+upstream to protect), and no duplicate refetch on the first SSE connect. Per-IP limits
+also hurt real users behind one NAT (offices, mobile carriers); that's why the per-user
+Redis layer exists.
 
 ## Q: Why is the network split in two?
 
@@ -325,7 +410,7 @@ Known limitations, tracked deliberately:
    spans; add it and the cross-service story becomes visual.
 2. **Retry backoff** — the retry topic has no delay; real systems use time-partitioned
    retry topics or a scheduler.
-3. **Keyset pagination** — listing uses OFFSET; fine here, keyset at scale.
+3. **Keyset pagination** — the feed uses it; `GET /v1/files` still uses OFFSET.
 4. **Outbox → CDC** — polling works; Debezium is the grown-up version.
 5. **Push delivery guarantees**: SSE push exists (`/v1/events`), but events missed while
    disconnected aren't replayed (resync only) and the stream registry is single-replica.

@@ -10,7 +10,17 @@
 in Feeds, can be liked, or can be downloaded by anyone other than the owner. An infected
 or failed File can never be published.
 
-**Feed** — the Published files of the users you follow, newest first.
+**User** — a person who can log in. Keycloak owns the identity; the api keeps a local copy
+(`users`: Keycloak `sub` + username) created the first time the user calls the api. A user
+who has never called the api can't be found or followed yet.
+
+**Follow** — one user subscribing to another's Published files. One-directional, no
+approval, and you can't follow yourself.
+
+**Like** — one user's mark on one Published file. At most one per user and file; liking
+again changes nothing. The file's owner is notified of a new Like, not of an unlike.
+
+**Feed** — the Published files of the users you follow, newest first (by upload time).
 
 **Claim** — a processor taking exclusive-by-intent ownership of one File's processing.
 

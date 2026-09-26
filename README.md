@@ -100,10 +100,16 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 |--------|-----------------------------|-------------|------------------------------------------|
 | GET    | `/healthz`, `/readyz`       | none        | liveness / readiness (checks pg + redis) |
 | GET    | `/v1/files`                 | bearer JWT  | own files, `limit`/`offset`              |
-| GET    | `/v1/files/:id`             | bearer JWT  | owner or admin (404 otherwise)           |
+| GET    | `/v1/files/:id`             | bearer JWT  | owner, admin, or anyone if Published (404 otherwise) |
+| PATCH  | `/v1/files/:id`             | bearer JWT  | owner only: `{visibility: private\|public}` |
 | POST   | `/v1/files`                 | bearer JWT  | optional `Idempotency-Key` header        |
 | POST   | `/v1/files/:id/complete`    | bearer JWT  | verifies object exists + size matches    |
-| POST   | `/v1/files/:id/download-url`| bearer JWT  | 5-minute presigned GET URL               |
+| POST   | `/v1/files/:id/download-url`| bearer JWT  | 5-minute presigned GET URL; same read rule as GET |
+| PUT/DELETE | `/v1/files/:id/like`    | bearer JWT  | like / unlike a Published file (idempotent) |
+| GET    | `/v1/feed`                  | bearer JWT  | Published files of people you follow; `limit`, opaque `cursor` |
+| GET    | `/v1/users?q=`              | bearer JWT  | username prefix search                   |
+| GET    | `/v1/users/:username`       | bearer JWT  | profile: follower/following counts       |
+| PUT/DELETE | `/v1/users/:username/follow` | bearer JWT | follow / unfollow (idempotent)       |
 | DELETE | `/v1/files/:id`             | role `admin`| purges objects + row                     |
 | GET    | `/v1/events`                | bearer JWT  | SSE stream of your file events (served by the notifier); closed at token expiry |
 

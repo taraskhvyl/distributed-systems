@@ -30,10 +30,16 @@ round-trip per request — validation is signature + claims, in-process.
   would use client-credentials.
 
 **Authorization** — two layers:
-1. **Ownership**: every query filters by `owner_id` from the JWT (`sub`); the API never
-   trusts a client-supplied user id. Non-owned, non-admin lookups return **404, not 403**
-   (`services/api/src/routes.ts`, `findOwnedFile`) — a 403 would leak the existence of
-   other users' file ids.
+1. **Ownership and publication**: the user id always comes from the JWT (`sub`), never
+   from the client. Two named gates in `services/api/src/file-access.ts`:
+   - `findReadableFile` (GET, download): owner, admin, or anyone if the file is
+     Published (`public` AND `ready`). The rule is in the SQL `WHERE`, so a file that
+     doesn't pass is simply not returned.
+   - `findOwnedFile` / `owner_id = $2` in the UPDATE (complete, PATCH visibility): owner only.
+
+   Everything else returns **404, not 403**: a 403 would confirm that a private file id
+   exists. Non-owners get `serializePublicFile`, a separate allow-list of fields (no
+   status, checksum or visibility), so a new column can't leak by default.
 2. **Roles**: `DELETE /v1/files/:id` requires the `admin` realm role (`requireRole`).
    The demo shows both sides: user → 403, admin → 204.
 
@@ -127,6 +133,19 @@ bundled delete, cannot read `media-thumbnails` it doesn't need; `api-svc` cannot
 infected-file run proves the purge; the failed DLQ'd file from earlier debugging is
 physical evidence in `file-events-dlq`.
 
+### Thumbnails are capability URLs
+
+`media-thumbnails` is anonymously readable, so a thumbnail is protected only by its
+unguessable key (`<fileId>.webp`, a random UUIDv4 = 122 bits): a **capability URL**, like a
+"anyone with the link" share. That's fine for private files whose id never left the
+owner's browser. It is **not revocable**: after a file was public, its id sat in followers'
+feeds, and making it private again doesn't stop those people from fetching the thumbnail
+(browser cache, copied link). Accepted for now: small leak, CDN-friendly, no per-request
+signing. The fix is on the roadmap: make the bucket private and return a short-lived
+presigned GET in `thumbnailUrl` only to viewers who pass `findReadableFile`, so revocation
+takes effect within the URL's TTL. Originals are not affected: downloads always go through
+a 5-minute presigned URL behind the read gate.
+
 ## Rate limiting (defense in depth)
 
 Two layers with different keys and failure domains:
@@ -148,7 +167,8 @@ works if clients honor it — the demo client does (`api_retry`).
 ## Database least privilege
 
 - `api_user`: SELECT/INSERT/UPDATE/DELETE on `files`, DML on `outbox_events` (+ sequence
-  grants — the classic gotcha: table grants do not cover `BIGSERIAL` sequences).
+  grants — the classic gotcha: table grants do not cover `BIGSERIAL` sequences),
+  SELECT/INSERT/UPDATE on `users`, SELECT/INSERT/DELETE on `follows` and `likes`.
 - `processor_user`: SELECT/UPDATE on `files`, nothing else — it cannot insert rows, touch
   the outbox, or delete files.
 - Schema is created by the init job (superuser), not by services. In production:

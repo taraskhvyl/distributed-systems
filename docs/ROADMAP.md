@@ -45,13 +45,25 @@ Q&A entries: PKCE and why it exists; CORS preflight on presigned URLs; SSE auth 
 
 ### 1b. Social features
 
-- [ ] File **Visibility** (`private` default / `public`); non-owners can see and download **Published files** only
-- [ ] Follow / unfollow (one-directional, no approval)
-- [ ] Feed (**fan-out on read**: one SQL query over follows + published files)
-- [ ] Likes: `likes (user_id, file_id)` PK, `like_count` updated in the same transaction, `file.liked` outbox event → SSE to the owner
-- [ ] UI: feed, follow button, like button, live notifications
+- [x] File **Visibility** (`private` default / `public`); non-owners can see and download **Published files** only
+- [x] Follow / unfollow (one-directional, no approval)
+- [x] Feed (**fan-out on read**: one SQL query over follows + published files)
+  - Prediction: _following 1000 users instead of 3 makes the feed slower._ **Correct**, and the plan changes too:
+    3 follows = index lookups per author, 0.5 ms; 1000 follows = Seq Scan over all 20k Published files, 27 ms
+    (`scripts/experiment-feed-plan.sh`).
+- [x] Likes: `likes (user_id, file_id)` PK, `like_count` updated in the same transaction, `file.liked` outbox event → SSE to the owner
+  - Prediction: _50 concurrent likes: atomic `like_count + 1` ends at 50, read-modify-write below 50._ **Correct:**
+    50 vs 10, with 50 rows in `likes` either way (`scripts/experiment-like-race.sh`).
+  - Prediction: _a like shows up in the owner's open tab instantly, no refresh._ **Correct for delivery:** the `file.liked` frame reached alice's stream
+    0.25–0.43 s after the like (curl over HTTP/1.1 and HTTP/2, through the gateway). The browser toast was not confirmed; skipped.
+- [ ] UI: feed, follow button, like button, live notifications (all built; live toast not confirmed in a browser)
 
 Q&A entries: fan-out on read vs write; idempotent likes.
+
+Follow-ups found in 1b (not scheduled):
+- Private thumbnails via presigned GET, so unpublishing also revokes the thumbnail URL (SECURITY.md, "Thumbnails are capability URLs")
+- Optional: type-check the web app with JSDoc + `// @ts-check` and `tsc --noEmit` (keeps "no build step")
+- Optional frontend track: React + Vite + TS + Tailwind/shadcn rewrite of `web/` (drops "no build step"; bundle with the pnpm switch)
 
 ## Phase 2 — Tracing
 
@@ -119,8 +131,9 @@ Pick in any order; suggested: d → a → e → c.
 - [ ] **d) Per-user storage quotas**: consistent counters under concurrency (check-then-act races, reserve/commit)
 - [ ] **a) CDC with Debezium** instead of outbox polling: compare latency and moving parts
 - [ ] **e) Multi-region**: written design exercise only (what replicates, what's the source of truth)
-- [ ] **c) KEDA on k8s** (kind/k3d): autoscale processors on consumer lag
+- [ ] **c) KEDA on k8s** (kind/k3d): autoscale processors on consumer lag; topics as Strimzi
+  `KafkaTopic` resources (declarative, drift-corrected) instead of the `kafka-init` script
 - [ ] **f) Replace kafkajs** (unmaintained since 2023; logs `TimeoutNegativeWarning` on Node 24) with
   `@confluentinc/kafka-javascript` in the api relay and notifier
 
-Out of scope: keyset pagination and multipart uploads. They're API design, not distributed systems.
+Out of scope: multipart uploads (the feed already uses keyset pagination). They're API design, not distributed systems.
