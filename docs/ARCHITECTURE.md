@@ -4,21 +4,44 @@
 
 Three tiers, two networks, one exposed port.
 
-```
- Internet (your laptop)
-    │  https://app.localhost   → browser app (static, PKCE login)
-    │  https://auth.localhost  → OIDC tokens
-    │  https://api.localhost   → REST API (+ /v1/events → notifier, SSE)
-    │  https://s3.localhost    → S3 API (presigned uploads/downloads, public thumbnails)
-    ▼
-┌───────────────────────────── edge network ─────────────────────────────┐
-│  gateway (nginx:443)  keycloak  api  notifier  storage(S3 :8333)      │
-└──────────────────────────────────┼─────────────────────────────────────┘
-                 api, notifier, storage also attach to:
-┌──────────────────────────────────▼─ data network ─────────────────────┐
-│  postgres   redis   kafka   storage   api   processor   notifier      │
-│  lgtm (traces/logs; Grafana on 127.0.0.1:3000 only)                   │
-└───────────────────────────────────────────────────────────────────────┘
+<!-- Same diagram as in README.md: keep both in sync. -->
+```mermaid
+flowchart LR
+  browser["browser / demo/client.py"] -- "HTTPS :443" --> gateway
+
+  subgraph edge["mediashare-edge network"]
+    gateway["gateway (nginx)"]
+    web["static web app (web/)"]
+    keycloak["keycloak (OIDC, JWT)"]
+    api["api (Node + TS)"]
+    notifier["notifier (Node, SSE)"]
+    storage["storage (SeaweedFS S3)"]
+    gateway -- "app.localhost" --> web
+    gateway -- "auth.localhost" --> keycloak
+    gateway -- "api.localhost" --> api
+    gateway -- "api.localhost/v1/events" --> notifier
+    gateway -- "s3.localhost" --> storage
+  end
+
+  subgraph data["mediashare-data network"]
+    postgres[(postgres)]
+    redis[(redis)]
+    kafka{{kafka}}
+    processor["processor (Python)"]
+    lgtm["lgtm: traces + logs<br/>Grafana 127.0.0.1:3000"]
+  end
+
+  api --> postgres
+  api --> redis
+  api -- "outbox relay" --> kafka
+  kafka --> processor
+  kafka --> notifier
+  processor --> postgres
+  processor --> storage
+  api --> storage
+  api -. OTLP .-> lgtm
+  notifier -. OTLP .-> lgtm
+  processor -. OTLP .-> lgtm
 ```
 
 Network rules (enforced by Docker, mirroring VPC subnets + security groups):
@@ -43,60 +66,63 @@ the edge network at all. The notifier is, because it serves the browser's SSE st
 
 ## The upload flow (the full sequence)
 
-```
- client            gateway        api            postgres      kafka         processor        storage
-   │                 │            │                │            │               │               │
-   │── POST /realms/media/token ──┼────────────────┼────────────┼───────────────┼───────────────►keycloak
-   │◄──────────── access token ───┼────────────────┼────────────┼───────────────┼───────────────┘
-   │
-   │── POST /v1/files {meta} ────►│── validate ───►│             │               │               │
-   │                              │   JWT, insert  │ row status  │               │               │
-   │                              │   'pending'    │ = pending    │               │               │
-   │◄── {id, presigned PUT url} ──│                │             │               │               │
-   │
-   │── PUT bytes (presigned, no auth) ─────────────┼──────────────┼───────────────┼──────────────►│
-   │◄── 200 ───────────────────────────────────────┼──────────────┼───────────────┼──────────────┘
-   │
-   │── POST /v1/files/:id/complete►│── HEAD obj ────┼──────────────┼───────────────┼──────────────►│
-   │                              │  size check    │              │               │               │
-   │                              │  TX: status=   │              │               │               │
-   │                              │  'uploaded' +  │              │               │               │
-   │                              │  outbox insert │              │               │               │
-   │◄── 202 ──────────────────────│                │              │               │               │
-   │                              │◄─ relay poll: SELECT ... FOR UPDATE SKIP LOCKED
-   │                              │  publish file.uploaded ──────►│               │               │
-   │                              │  mark published_at=now()      │               │               │
-   │                              │                │              │── consume ───►│               │
-   │                              │                │              │               │── claim() ───►│
-   │                              │                │              │               │  status='processing'
-   │                              │                │              │               │── GET obj ───►│
-   │                              │                │              │               │── scan ──────│
-   │                              │                │              │               │── PUT thumb ─►│
-   │                              │                │◄─────────────│─ status='ready', checksum
-   │                              │                │              │◄─ file.ready ─│               │
-   │── GET /v1/files/:id ────────►│                │              │        (notifier consumes, logs notification)
-   │◄── status: ready + thumbUrl ─│                │              │               │               │
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as client
+  participant K as keycloak
+  participant A as api
+  participant P as postgres
+  participant S as storage (S3)
+  participant Q as kafka
+  participant W as processor
+  participant N as notifier
+
+  C->>K: POST /realms/media/token
+  K-->>C: access token (JWT)
+  C->>A: POST /v1/files {meta}
+  A->>A: verify JWT locally (JWKS)
+  A->>P: INSERT files (status = pending)
+  A-->>C: {id, presigned PUT url}
+  C->>S: PUT bytes (presigned, no api involved)
+  S-->>C: 200
+  C->>A: POST /v1/files/:id/complete
+  A->>S: HEAD object (size check)
+  A->>P: TX: status = uploaded + INSERT outbox_events
+  A-->>C: 202
+  loop relay, every 250 ms
+    A->>P: SELECT unpublished FOR UPDATE SKIP LOCKED
+    A->>Q: publish file.uploaded (key = fileId)
+    A->>P: mark published_at = now()
+  end
+  Q->>W: consume file.uploaded
+  W->>P: claim(): uploaded → processing
+  W->>S: GET object
+  W->>W: scan + checksum + thumbnail
+  W->>S: PUT thumbnail
+  W->>P: status = ready, checksum
+  W->>Q: file.ready
+  Q->>N: consume file.ready
+  N-->>C: SSE event (if a tab is connected)
+  C->>A: GET /v1/files/:id (or poll)
+  A-->>C: status ready + thumbnail URL
 ```
 
 ## File state machine (eventual consistency)
 
-```
-            POST /v1/files                    complete + HEAD verified         processor claim()
- ┌──────┐ ─────────────────► ┌─────────┐ ─────────────────────────► ┌───────────┐
- │  –   │                    │ pending │                              │ uploaded  │
- └──────┘                    └─────────┘                              └───────────┘
-                                        complete before upload: 409       │    │
-                                        size mismatch: 409                │    │
-                                                                       ▼    │ scan: EICAR
-                                                                  ┌────────┐ │ delete object
-                                                                  │processing│ │
-                                                                  └────────┘ │
-                                                                   │      │  ▼
-                                              thumbnail + checksum │      │ 3 failed attempts
-                                                                   ▼      ▼          ▼
-                                                                ┌─────┐ ┌────────┐ ┌──────┐
-                                                                │ready│ │infected│ │failed│
-                                                                └─────┘ └────────┘ └──────┘
+```mermaid
+stateDiagram-v2
+  [*] --> pending: POST /v1/files
+  pending --> uploaded: complete (HEAD verified size)
+  note right of pending: complete before upload or size mismatch → 409
+  uploaded --> processing: processor claim()
+  processing --> ready: thumbnail + checksum
+  processing --> infected: scan hit (object deleted)
+  processing --> uploaded: attempt failed (release) or lease expired (reaper)
+  uploaded --> failed: max attempts reached (→ DLQ)
+  ready --> [*]
+  infected --> [*]
+  failed --> [*]
 ```
 
 Clients can poll `GET /v1/files/:id` (the demo does), or subscribe to push: the browser
@@ -172,12 +198,15 @@ Every service sends OpenTelemetry traces and logs over OTLP to `lgtm` (`grafana/
 collector + Tempo for traces + Loki for logs + Prometheus + Grafana). Open Grafana →
 Explore → Tempo at http://127.0.0.1:3000. A like is one trace:
 
-```
-browser (web/js/trace.js mints traceparent, logs "[trace] … traceId=…")
-  → gateway (nginx passes the header, no span of its own)
-  → api  PUT /v1/files/:id/like → pg queries → COMMIT (outbox row stores traceparent)
-  → api  outbox publish (gap = outbox delay, attribute outbox.delay_ms) → send file-events
-  → notifier process file-events → sse.publish (open_streams; traceId in the SSE frame)
+```mermaid
+flowchart TD
+  B["browser<br/>web/js/trace.js mints traceparent"] -- "traceparent header" --> G["gateway (nginx)<br/>passes header, no span"]
+  G --> R["api: PUT /v1/files/:id/like<br/>pg queries → COMMIT"]
+  R -- "outbox_events.traceparent<br/>(same transaction)" --> O["api: outbox publish<br/>gap = outbox.delay_ms"]
+  O --> K["api: send file-events"]
+  K -- "traceparent Kafka header" --> N["notifier: process file-events"]
+  N --> S["notifier: sse.publish<br/>sse.open_streams"]
+  S -- "traceId in SSE frame" --> BO["owner's browser<br/>console: [trace] received"]
 ```
 
 Upload: `POST …/complete` → outbox → `processor handle file.uploaded` (claim, S3 get,

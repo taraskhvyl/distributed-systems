@@ -6,22 +6,47 @@ consumer groups with retry/DLQ, OAuth2/OIDC (with a browser app using hand-writt
 live updates over Server-Sent Events, layered rate limiting, and network segmentation —
 all running locally via Docker Compose.
 
+<!-- Same diagram as in docs/ARCHITECTURE.md: keep both in sync. -->
+```mermaid
+flowchart LR
+  browser["browser / demo/client.py"] -- "HTTPS :443" --> gateway
+
+  subgraph edge["mediashare-edge network"]
+    gateway["gateway (nginx)"]
+    web["static web app (web/)"]
+    keycloak["keycloak (OIDC, JWT)"]
+    api["api (Node + TS)"]
+    notifier["notifier (Node, SSE)"]
+    storage["storage (SeaweedFS S3)"]
+    gateway -- "app.localhost" --> web
+    gateway -- "auth.localhost" --> keycloak
+    gateway -- "api.localhost" --> api
+    gateway -- "api.localhost/v1/events" --> notifier
+    gateway -- "s3.localhost" --> storage
+  end
+
+  subgraph data["mediashare-data network"]
+    postgres[(postgres)]
+    redis[(redis)]
+    kafka{{kafka}}
+    processor["processor (Python)"]
+    lgtm["lgtm: traces + logs<br/>Grafana 127.0.0.1:3000"]
+  end
+
+  api --> postgres
+  api --> redis
+  api -- "outbox relay" --> kafka
+  kafka --> processor
+  kafka --> notifier
+  processor --> postgres
+  processor --> storage
+  api --> storage
+  api -. OTLP .-> lgtm
+  notifier -. OTLP .-> lgtm
+  processor -. OTLP .-> lgtm
 ```
-                        ┌────────────────── mediashare-edge network ──────────────────┐
-                        │                                                              │
-  browser ─ HTTPS:443 ─▶│  gateway (nginx) ── app.localhost ──▶ static web app (web/)  │
-  demo/client.py        │       │            ── auth.localhost ─▶ keycloak (OIDC, JWT)  │
-                        │       │            ── api.localhost ──▶ api (Node+TS)         │
-                        │       │               └ /v1/events ───▶ notifier (SSE)        │
-                        │       │            ── s3.localhost ───▶ storage (SeaweedFS)   │
-                        └───────┼──────────────────────────────────────────────────────┘
-                                │ api, notifier, storage also join:
-                        ┌───────┴───────────── mediashare-data network ────────────────┐
-                        │  api ──▶ postgres ──▶ redis ──▶ kafka ◀── processor (Python) │
-                        │                                          ◀── notifier (Node) │
-                        │  storage (S3) ◀── api, processor                         │
-                        └───────────────────────────────────────────────────────────┘
-```
+
+api, notifier and storage are drawn on the edge network but also join the data network.
 
 **Nothing but the gateway's port 443 is exposed to your host.** The gateway cannot even
 reach the database, Kafka, or Redis — it only talks to `api`, `notifier` (one path),
