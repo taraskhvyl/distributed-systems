@@ -33,11 +33,12 @@ Already done:
     _Presigned PUT: SeaweedFS rejects the preflight._ **Wrong for SeaweedFS** (`-s3.allowedOrigins`
     defaults to `*`), **right for AWS S3** (no bucket CORS rule = every preflight rejected).
 - [x] Upload from the browser with a progress bar
-- [ ] `notifier` serves `GET /v1/events` (SSE) on the edge network; the gateway routes it; JWT verified at connect
-- [ ] Client reads SSE via `fetch()` streaming + `Bearer` header (not `EventSource`); reconnect loop
-- [ ] Server closes the stream at the token's `exp`; the client reconnects with a fresh token
-  - Prediction: _the stream closes at exp; the client refreshes the token and reconnects within a second._
-- [ ] Document the notifier's edge exposure in `SECURITY.md`
+- [x] `notifier` serves `GET /v1/events` (SSE) on the edge network; the gateway routes it; JWT verified at connect
+- [x] Client reads SSE via `fetch()` streaming + `Bearer` header (not `EventSource`); reconnect loop
+- [x] Server closes the stream at the token's `exp`; the client reconnects with a fresh token
+  - Prediction: _the stream closes at exp; the client refreshes the token and reconnects within a second._ **Correct:** opened with
+    `closesInMs: 299899`, closed exactly 5 min later, reopened in the same second.
+- [x] Document the notifier's edge exposure in `SECURITY.md`
 
 Q&A entries: PKCE and why it exists; CORS preflight on presigned URLs; SSE auth options
 (fetch vs ticket vs query-string); BFF as the production-hardening answer.

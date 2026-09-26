@@ -13,7 +13,7 @@ Each entry names the threat, the control, and the accepted trade-off.
 | Information disclosure          | private uploads bucket + short-TTL presigned GETs; 404 (not 403) for other users' files; log redaction of `Authorization` |
 | Denial of service               | two rate-limit layers (nginx per-IP, Redis per-user token bucket)        |
 | Elevation of privilege          | realm roles (`user`/`admin`) checked server-side; per-service DB roles and scoped S3 identities |
-| Lateral movement                | network segmentation: gateway cannot reach data stores; workers unreachable from the edge |
+| Lateral movement                | network segmentation: gateway cannot reach data stores; processor unreachable from the edge; notifier exposes only `/v1/events` |
 
 ## Identity and access
 
@@ -41,12 +41,32 @@ round-trip per request — validation is signature + claims, in-process.
 
 Two Docker networks stand in for VPC subnets + security groups:
 
-- **edge** = public subnet. Hosts the gateway, keycloak, api, and storage's S3 endpoint.
+- **edge** = public subnet. Hosts the gateway, keycloak, api, notifier, and storage's S3 endpoint.
 - **data** = private subnet. Postgres, Kafka, Redis, storage, and the workers.
 
 Only the gateway publishes a host port (443). Even so, the gateway's network membership
-limits its *east-west* blast radius: it has no route to Postgres/Kafka/Redis. The workers
-(processor, notifier) live only on `data` — the internet cannot address them at all.
+limits its *east-west* blast radius: it has no route to Postgres/Kafka/Redis. The processor
+lives only on `data`, so the internet cannot address it at all.
+
+### Notifier edge exposure
+
+Since Phase 1a the notifier is on **both** networks: the gateway routes
+`api.localhost/v1/events` (SSE) to it, and it fetches Keycloak's JWKS over `edge`.
+
+What limits the exposure:
+- No host port. Only the gateway reaches it, and nginx routes exactly one path
+  (`location = /v1/events`); everything else on the notifier is unreachable from outside.
+- Per-IP rate limit (`edge` zone) on connects, so reconnect storms are bounded.
+- A valid Keycloak JWT is required (`@mediashare/auth`), and a user only receives events
+  whose `ownerId` equals their `sub`.
+- The stream is **closed at the token's `exp`** (`events-server.ts`). Without that, a token
+  checked once at connect would authorize the stream forever: a disabled user would keep
+  receiving events. Revocation latency is bounded by the token TTL (300 s).
+
+What it costs: an internet-facing process now holds Kafka consumer credentials on the
+`data` network. A bug in its HTTP handling is a path from the edge to Kafka. The hardened
+design splits it: a thin **SSE gateway** on `edge` with no Kafka access, fed by the
+notifier through Redis pub/sub (the same fan-out Phase 3 needs for multiple replicas).
 TLS terminates at the gateway; internal traffic is plaintext inside the trusted network
 (a standard trade-off — the upgrade path is mTLS via a service mesh).
 

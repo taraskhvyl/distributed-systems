@@ -6,14 +6,15 @@ Three tiers, two networks, one exposed port.
 
 ```
  Internet (your laptop)
+    │  https://app.localhost   → browser app (static, PKCE login)
     │  https://auth.localhost  → OIDC tokens
-    │  https://api.localhost   → REST API
+    │  https://api.localhost   → REST API (+ /v1/events → notifier, SSE)
     │  https://s3.localhost    → S3 API (presigned uploads/downloads, public thumbnails)
     ▼
 ┌───────────────────────────── edge network ─────────────────────────────┐
-│  gateway (nginx:443)   keycloak   api   storage(S3 gateway :8333)     │
+│  gateway (nginx:443)  keycloak  api  notifier  storage(S3 :8333)      │
 └──────────────────────────────────┼─────────────────────────────────────┘
-                          api also attaches to:
+                 api, notifier, storage also attach to:
 ┌──────────────────────────────────▼─ data network ─────────────────────┐
 │  postgres   redis   kafka   storage   api   processor   notifier      │
 └───────────────────────────────────────────────────────────────────────┘
@@ -23,19 +24,20 @@ Network rules (enforced by Docker, mirroring VPC subnets + security groups):
 
 | container  | edge | data | can be reached by              | can reach                       |
 |------------|------|------|--------------------------------|---------------------------------|
-| gateway    | ✔    | ✖    | internet (host :443 only)      | api, keycloak, storage          |
-| keycloak   | ✔    | ✖    | gateway, api                   | (nothing it needs)              |
+| gateway    | ✔    | ✖    | internet (host :443 only)      | api, notifier, keycloak, storage |
+| keycloak   | ✔    | ✖    | gateway, api, notifier (JWKS)  | (nothing it needs)              |
 | api        | ✔    | ✔    | gateway (public), internal     | keycloak, postgres, redis, kafka, storage |
 | storage    | ✔    | ✔    | gateway (S3 endpoint), internal| (nothing it needs)              |
 | postgres   | ✖    | ✔    | api, processor                 | —                               |
 | kafka      | ✖    | ✔    | api, processor, notifier       | —                               |
 | redis      | ✖    | ✔    | api                            | —                               |
 | processor  | ✖    | ✔    | internal only                  | postgres, kafka, storage        |
-| notifier   | ✖    | ✔    | internal only                  | kafka, optional webhook egress  |
+| notifier   | ✔    | ✔    | gateway (`/v1/events` only)    | kafka, keycloak, webhook egress |
 
 The gateway is *physically incapable* of reaching the database, Kafka, or Redis. Even if
-nginx were fully compromised, data stores are unreachable from it. Workers (processor,
-notifier) are not on the edge network at all — there is no route from the internet to them.
+nginx were fully compromised, data stores are unreachable from it. The processor is not on
+the edge network at all. The notifier is, because it serves the browser's SSE stream: see
+"Notifier edge exposure" in [SECURITY.md](SECURITY.md).
 
 ## The upload flow (the full sequence)
 
@@ -95,8 +97,9 @@ notifier) are not on the edge network at all — there is no route from the inte
                                                                 └─────┘ └────────┘ └──────┘
 ```
 
-Clients observe this only by polling `GET /v1/files/:id` (the demo does this). In a product
-you would add push (webhooks / WebSocket / SSE) — the notifier service is the natural place.
+Clients can poll `GET /v1/files/:id` (the demo does), or subscribe to push: the browser
+keeps an SSE stream to `GET /v1/events` (notifier), which forwards every event whose
+`ownerId` matches the token's user (`services/notifier/src/events-server.ts`).
 
 ## Data model (postgres)
 

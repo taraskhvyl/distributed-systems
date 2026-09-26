@@ -2,17 +2,20 @@
 
 A small but **complete** media-sharing platform built the way production systems are:
 presigned S3 uploads, eventual consistency, the transactional outbox pattern, Kafka
-consumer groups with retry/DLQ, OAuth2/OIDC, layered rate limiting, and network
-segmentation — all running locally via Docker Compose.
+consumer groups with retry/DLQ, OAuth2/OIDC (with a browser app using hand-written PKCE),
+live updates over Server-Sent Events, layered rate limiting, and network segmentation —
+all running locally via Docker Compose.
 
 ```
                         ┌────────────────── mediashare-edge network ──────────────────┐
                         │                                                              │
-  client ── HTTPS:443 ─▶│  gateway (nginx) ── auth.localhost ──▶ keycloak (OIDC, JWT)  │
-  (demo/client.py)      │       │            ── api.localhost ──▶ api (Node+TS)       │
-                        │       │            ── s3.localhost ───▶ storage (SeaweedFS) │
+  browser ─ HTTPS:443 ─▶│  gateway (nginx) ── app.localhost ──▶ static web app (web/)  │
+  demo/client.py        │       │            ── auth.localhost ─▶ keycloak (OIDC, JWT)  │
+                        │       │            ── api.localhost ──▶ api (Node+TS)         │
+                        │       │               └ /v1/events ───▶ notifier (SSE)        │
+                        │       │            ── s3.localhost ───▶ storage (SeaweedFS)   │
                         └───────┼──────────────────────────────────────────────────────┘
-                                │ api also joins:
+                                │ api, notifier, storage also join:
                         ┌───────┴───────────── mediashare-data network ────────────────┐
                         │  api ──▶ postgres ──▶ redis ──▶ kafka ◀── processor (Python) │
                         │                                          ◀── notifier (Node) │
@@ -21,7 +24,8 @@ segmentation — all running locally via Docker Compose.
 ```
 
 **Nothing but the gateway's port 443 is exposed to your host.** The gateway cannot even
-reach the database, Kafka, or Redis — it only talks to `api`, `keycloak`, and `storage`.
+reach the database, Kafka, or Redis — it only talks to `api`, `notifier` (one path),
+`keycloak`, and `storage`.
 
 ## Quickstart
 
@@ -30,6 +34,10 @@ make up        # copies .env, generates TLS cert, builds, starts everything
 make ps        # wait until everything is "healthy"
 make demo      # runs the full end-to-end walkthrough (installs `requests` if needed)
 ```
+
+Then open **https://app.localhost** and log in as `demo` / `demo-pass`: upload a file,
+watch the progress bar, and see its status change live (`uploaded → ready`) without
+refreshing.
 
 Requirements: Docker + Docker Compose, Python 3. `make up` generates a local dev CA and a
 server certificate for `app/api/auth/s3.localhost` under `gateway/certs/` (macOS resolves
@@ -42,21 +50,24 @@ fully quit and reopen the browser:
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain gateway/certs/ca.crt  # macOS
 ```
 
-The demo client narrates 13 steps and asserts every behavior:
+The demo client narrates every step and asserts each behavior:
 
 1. call the API without a token → 401
 2. obtain an OIDC access token from Keycloak (JWT claims shown)
 3. register file metadata → receive a **presigned S3 upload URL**
 4. replay the same `Idempotency-Key` → the original file, no duplicate
 5. upload bytes **directly to S3** through the gateway — no auth header, no API hop
+   - 5b. open the live event stream: 401 without a token, then connect with one
 6. confirm the upload → API writes an **outbox event** in the same transaction
 7. poll status: `pending → uploaded → processing → ready` (**eventual consistency**)
+   - 7b. the same result also arrived **pushed over SSE** (`file.ready`)
 8. compare sha256 of the processed file against the local file
 9. download the original via a short-lived presigned URL; fetch the **public** thumbnail
 10. upload an "infected" file → processor detects it, purges the object, status `infected`, downloads blocked (403)
 11. burst 12 mutations → the per-user Redis token bucket returns 429s (client honors `Retry-After`)
 12. RBAC: regular user's DELETE → 403; admin's DELETE → 204
-13. list files
+13. CORS: only `https://app.localhost` may call the api and PUT to presigned S3 URLs
+14. list files
 
 ## Users (seeded in the Keycloak realm)
 
@@ -72,11 +83,12 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 
 | service    | stack          | role                                                             |
 |------------|----------------|------------------------------------------------------------------|
-| gateway    | nginx          | TLS termination, host routing, per-IP rate limit, security headers |
+| gateway    | nginx          | TLS termination, host routing, per-IP rate limit, security headers, serves the web app |
+| web        | static HTML + ES modules | browser app: PKCE login, direct-to-S3 upload with progress, live status (no build step) |
 | keycloak   | Keycloak 26    | OIDC identity provider, issues JWTs                              |
 | api        | Node 24 + TS (Fastify 5) | public REST API: auth, presigned URLs, idempotency, outbox relay |
 | processor  | Python 3.14    | Kafka consumer: malware scan, thumbnails, retry/DLQ, idempotent CAS claim |
-| notifier   | Node 24 + TS   | second Kafka consumer group: user notifications / webhooks       |
+| notifier   | Node 24 + TS   | second Kafka consumer group: webhooks + SSE stream `/v1/events` to the browser |
 | postgres   | Postgres 18    | file metadata + outbox table, least-privilege per-service roles  |
 | kafka      | Kafka 4.3 (KRaft) | event backbone: `file-events`, `-retry`, `-dlq`              |
 | storage    | SeaweedFS 4.47 | S3-compatible object store: private + public buckets, scoped IAM identities |
@@ -93,6 +105,21 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 | POST   | `/v1/files/:id/complete`    | bearer JWT  | verifies object exists + size matches    |
 | POST   | `/v1/files/:id/download-url`| bearer JWT  | 5-minute presigned GET URL               |
 | DELETE | `/v1/files/:id`             | role `admin`| purges objects + row                     |
+| GET    | `/v1/events`                | bearer JWT  | SSE stream of your file events (served by the notifier); closed at token expiry |
+
+CORS: only the origin `https://app.localhost` is allowed (api and presigned S3 URLs).
+
+## Repository layout
+
+```
+services/api         Node + TS REST API          services/notifier   Node + TS consumer + SSE
+services/processor   Python worker               packages/auth       shared JWT verification
+web/                 browser app (ES modules)    gateway/            nginx config + certs
+db/init/             schema + roles              keycloak/           realm import
+demo/                end-to-end client           docs/               architecture, security, Q&A
+```
+
+Node services are npm workspaces built by one `services/node.Dockerfile` from the repo root.
 
 ## Exploring the running system
 
@@ -105,7 +132,8 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
 docker compose exec postgres psql -U api_user -d mediashare \
   -c "SELECT id, filename, status FROM files ORDER BY created_at DESC;"
 docker compose exec storage weed shell <<< "s3.bucket.list"
-curl -k https://s3.localhost/media-thumbnails/<thumbKey>        # public bucket, no auth
+curl --cacert gateway/certs/ca.crt https://s3.localhost/media-thumbnails/<thumbKey>   # public bucket, no auth
+docker compose logs -f notifier | grep sse                     # SSE streams opening/closing
 ```
 
 ## Documentation

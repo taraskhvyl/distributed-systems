@@ -213,6 +213,48 @@ Follow-ups:
 
 `make demo` step 13 asserts allow/deny for both the api and the presigned PUT.
 
+## Q: How do you push live updates to the browser, and how is the stream authenticated?
+
+**A:** Server-Sent Events: one long-lived HTTP response (`text/event-stream`) per tab,
+served by the notifier at `GET /v1/events` (`services/notifier/src/events-server.ts`).
+The notifier already consumes `file-events`, so every event whose `ownerId` matches the
+stream's user is written to it (`StreamRegistry.publish`). SSE, not WebSocket, because
+traffic is one-way (server → browser), it is plain HTTP through nginx, and it needs no
+protocol upgrade.
+
+The hard part is **auth**, because the browser's `EventSource` can't send an
+`Authorization` header. The options:
+
+| option | how | problem |
+|---|---|---|
+| token in the query string | `EventSource('/events?access_token=…')` | the token lands in access logs (our nginx log records `$request_uri`), browser history, `Referer` |
+| cookie | `EventSource` sends cookies | needs a cookie session (i.e. a BFF) plus CSRF thinking |
+| one-time ticket | `POST /events/ticket` with the bearer → 30 s single-use ticket in the URL | still a URL secret, but short-lived and single-use; needs a ticket store |
+| **`fetch()` + header** (ours) | read `res.body` as a stream, parse frames (`web/js/sse-parser.js`) | we reimplement reconnect and parsing that `EventSource` gives for free |
+
+**Token expiry on a long-lived connection.** The token is verified once, at connect.
+Without more, a stream opened with a 5-minute token would stay authorized forever, and a
+disabled user would keep receiving events. So the server closes the stream at the token's
+`exp`, and the client reconnects with a refreshed token (`web/js/live-events.js`).
+Observed: stream opened with `closesInMs: 299899`, closed exactly 5 minutes later, and
+reopened in the same second. Revocation latency is bounded by the token TTL.
+
+Follow-ups:
+- *"What about events sent while disconnected?"* Not replayed. On every (re)connect the
+  client reloads the file list (resync). The production answer is event ids +
+  `Last-Event-ID` and a replayable store (e.g. Kafka offsets per user, or a short outbox).
+- *"Reconnect storms?"* Exponential backoff with jitter (50–150 %), capped at 30 s, so a
+  notifier restart doesn't bring every client back in the same instant.
+- *"Proxies?"* nginx has `proxy_buffering off` (or events sit in a buffer) and a long
+  `proxy_read_timeout`; the server writes a `: ping` comment every 25 s so idle
+  intermediaries keep the connection and dead peers are detected.
+- *"Does it scale?"* Not yet: the registry is in one process's memory. With 3 replicas,
+  Kafka hands an event to whichever replica owns the partition, which may not hold the
+  user's stream. Fix: Redis pub/sub fan-out (roadmap Phase 3).
+- *"Production hardening?"* A BFF with an `HttpOnly` session cookie makes plain
+  `EventSource` work, and a separate SSE gateway without Kafka credentials shrinks the
+  internet-facing surface (see SECURITY.md, "Notifier edge exposure").
+
 ## Q: How would you rate-limit this? 
 
 **A:** Two layers, different keys, different failure domains: nginx per-IP (10 r/s,
@@ -285,7 +327,8 @@ Known limitations, tracked deliberately:
    retry topics or a scheduler.
 3. **Keyset pagination** — listing uses OFFSET; fine here, keyset at scale.
 4. **Outbox → CDC** — polling works; Debezium is the grown-up version.
-5. **Push notifications** — polling is a demo choice; SSE/webhooks belong in the notifier.
+5. **Push delivery guarantees**: SSE push exists (`/v1/events`), but events missed while
+   disconnected aren't replayed (resync only) and the stream registry is single-replica.
 6. **Multipart presigned uploads** for big files; per-user storage quotas (rate ≠ quota).
 7. **Multi-region** — presigned URLs are region-agnostic but the metadata DB and Kafka
    are the hard part: that's a whole separate design discussion (CQRS + event replication +
