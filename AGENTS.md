@@ -73,8 +73,13 @@ There is no unit test suite. `make demo` asserts every flow.
   idempotency keys, transactional outbox relay (`src/outbox.ts`).
 - `services/processor`: Python 3.14 Kafka consumer. Scan + thumbnail, CAS claim, retry/DLQ,
   expired-claim reaper (`src/consumer.py`, `src/db.py`).
-- `services/notifier`: Node consumer, separate consumer group.
-- `gateway/nginx.conf`: TLS, host routing, per-IP rate limit.
+- `services/notifier`: Node consumer (separate consumer group) + SSE endpoint
+  `GET /v1/events` for the browser (`src/events-server.ts`, `src/stream-registry.ts`).
+- `packages/auth`: shared JWT verification (`@mediashare/auth`), used by api and notifier.
+  Node services are npm workspaces built by one `services/node.Dockerfile` from the repo
+  root (build context `.`; `.dockerignore` keeps `.env` and certs out).
+- `web/`: static browser app (`app.localhost`), native ES modules in `web/js/`, no build step.
+- `gateway/nginx.conf`: TLS, host routing, per-IP rate limit, CSP for the web app.
 - `db/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need
   `make reset` (or a manual `ALTER` on a running db).
 - Kafka topics: `file-events` (3 partitions), `file-events-retry`, `file-events-dlq`.
@@ -85,6 +90,9 @@ There is no unit test suite. `make demo` asserts every flow.
 - Delivery is at-least-once everywhere. Every consumer must stay idempotent.
 - The processor DB role only has `SELECT, UPDATE` on `files`. It cannot write the outbox.
 - Networks: the gateway is on `edge` only and cannot reach postgres/kafka/redis. Keep it that way.
+  api and notifier are on both networks (the notifier serves SSE to the browser).
+- Shared compose values live in `x-` anchors at the top of `docker-compose.yml`
+  (`x-web-origin`, `x-auth-env`). Reference them; don't repeat the literals.
 - Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS). Keep them in sync with the code.
 - `CONTEXT.md` is the domain glossary (File, Published file, Feed, Lease…). Use its terms;
   update it when a term is settled.

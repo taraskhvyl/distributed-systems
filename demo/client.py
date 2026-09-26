@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -87,6 +88,39 @@ def wait_for_final_status(token, base, file_id, timeout=90):
     raise TimeoutError(f"file {file_id} did not reach a final state within {timeout}s")
 
 
+SSE_CONNECT_TIMEOUT_S = 10
+SSE_EVENT_TIMEOUT_S = 10
+
+
+def open_event_stream(token, base):
+    """Opens the SSE stream in a background thread; returns the list it appends events to."""
+    events = []
+    connected = threading.Event()
+
+    def listen():
+        headers = {"Authorization": f"Bearer {token}"}
+        with requests.get(f"{base}/v1/events", headers=headers, stream=True, verify=False, timeout=(5, 120)) as resp:
+            connected.set()
+            for line in resp.iter_lines(decode_unicode=True):
+                if line and line.startswith("data: "):
+                    events.append(json.loads(line[len("data: "):]))
+
+    threading.Thread(target=listen, daemon=True).start()
+    assert connected.wait(SSE_CONNECT_TIMEOUT_S), "SSE stream did not connect"
+    return events
+
+
+def wait_for_event(events, event_type, file_id, timeout=SSE_EVENT_TIMEOUT_S):
+    """Waits until an event of this type for this file has been received; returns it or None."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for event in events:
+            if event.get("eventType") == event_type and event.get("fileId") == file_id:
+                return event
+        time.sleep(0.2)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="mediashare end-to-end demo")
     parser.add_argument("--auth-base", default="https://auth.localhost")
@@ -156,6 +190,13 @@ def main():
         print(f"    HTTP {put.status_code} from S3 (200 = stored)")
         put.raise_for_status()
 
+        step("5b", "open the live event stream (SSE from the notifier) before completing")
+        resp = requests.get(f"{args.api_base}/v1/events", verify=False, timeout=10)
+        print(f"    without a token: HTTP {resp.status_code} (expected 401)")
+        assert resp.status_code == 401
+        live_events = open_event_stream(token, args.api_base)
+        print("    stream open; the result should arrive as a pushed event, no polling needed")
+
         step(6, "tell the API the upload finished -> triggers outbox event -> Kafka -> processor")
         resp = api_retry(token, args.api_base, "POST", f"/v1/files/{file_id}/complete")
         show(resp)
@@ -165,6 +206,13 @@ def main():
     step(7, "poll file status until the async pipeline finishes (eventual consistency)")
     status, file_obj = wait_for_final_status(token, args.api_base, file_id)
     print(f"    final status: {status}")
+
+    if not args.skip_upload:
+        step("7b", "the same result arrived live over SSE")
+        ready_event = wait_for_event(live_events, "file.ready", file_id)
+        for event in live_events:
+            print(f"    pushed {event['eventType']}: {event.get('message') or event['fileId']}")
+        assert ready_event, "no file.ready event arrived over SSE"
 
     if status == "ready":
         step(8, "verify checksum of processed file matches the local file")

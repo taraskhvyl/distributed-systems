@@ -219,8 +219,12 @@ services:
       context: .
       dockerfile: services/node.Dockerfile
       args: { SERVICE: notifier }
-    networks: [data]
+    # edge: serves the browser's SSE stream via the gateway and fetches Keycloak's JWKS.
+    # This makes the notifier internet-facing (see docs/SECURITY.md).
+    networks: [edge, data]
     environment:
+      PORT: "3001"
+      <<: *auth-env
       KAFKA_BROKERS: kafka:9092
       TOPIC_MAIN: file-events
       WEBHOOK_URL: ${WEBHOOK_URL:-}
@@ -229,6 +233,11 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
     restart: unless-stopped
 
   gateway:
@@ -242,6 +251,8 @@ services:
       - ./web:/usr/share/nginx/web:ro
     depends_on:
       api:
+        condition: service_started
+      notifier:
         condition: service_started
       keycloak:
         condition: service_healthy

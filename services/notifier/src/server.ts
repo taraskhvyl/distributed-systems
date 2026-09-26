@@ -1,78 +1,40 @@
-import pino from 'pino'
+import { createTokenVerifier } from '@mediashare/auth'
+import { config } from './config.js'
+import { EnvelopeHandler, startConsumer } from './consumer.js'
+import { startEventsServer } from './events-server.js'
+import { logger } from './log.js'
+import { describeEvent, sendNotification } from './notifications.js'
+import { StreamRegistry } from './stream-registry.js'
 
-export const logger = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-})
-
-export const config = {
-  kafkaBrokers: (process.env.KAFKA_BROKERS ?? 'kafka:9092').split(','),
-  topicMain: process.env.TOPIC_MAIN ?? 'file-events',
-  groupId: 'notifier',
-  webhookUrl: process.env.WEBHOOK_URL || null,
-}
-
-const NOTIFICATION_TEMPLATES: Record<string, (payload: Record<string, unknown>) => string> = {
-  'file.ready': (p) => `Your file "${p.filename ?? p.fileId}" is ready (thumbnail: ${p.thumbnailKey ? 'yes' : 'no'})`,
-  'file.rejected': (p) => `Your upload "${p.filename ?? p.fileId}" was rejected: ${p.reason}`,
-  'file.failed': (p) => `Your upload "${p.fileId}" could not be processed: ${p.error}`,
-}
-
-async function deliverWebhook(body: unknown): Promise<void> {
-  if (!config.webhookUrl) return
-  try {
-    const res = await fetch(config.webhookUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(3000),
-    })
-    if (!res.ok) logger.warn({ status: res.status }, 'webhook endpoint returned error status')
-  } catch (err) {
-    logger.warn({ err }, 'webhook delivery failed (would be retried with backoff in production)')
-  }
-}
-
+// Composition root: builds the parts and connects them. No logic of its own.
 async function main() {
-  const { Kafka } = await import('kafkajs')
-  const kafka = new Kafka({
-    clientId: 'mediashare-notifier',
-    brokers: config.kafkaBrokers,
-    retry: { retries: 10 },
-  })
-  const consumer = kafka.consumer({ groupId: config.groupId })
+  const registry = new StreamRegistry()
 
-  await consumer.connect()
-  await consumer.subscribe({ topic: config.topicMain, fromBeginning: false })
-  logger.info(
-    { groupId: config.groupId, topic: config.topicMain, webhook: Boolean(config.webhookUrl) },
-    'notifier started',
-  )
-
-  await consumer.run({
-    eachMessage: async ({ topic, partition, message }) => {
-      let envelope: any
-      try {
-        envelope = JSON.parse(message.value?.toString() ?? '')
-      } catch {
-        logger.warn({ topic, partition, offset: message.offset }, 'skipped malformed message')
-        return
-      }
-      const render = NOTIFICATION_TEMPLATES[envelope.eventType]
-      if (!render) return
-      const notification = {
-        eventId: envelope.eventId,
-        eventType: envelope.eventType,
-        userId: envelope.payload?.ownerId,
-        fileId: envelope.payload?.fileId,
-        message: render(envelope.payload ?? {}),
-        deliveredAt: new Date().toISOString(),
-      }
-      logger.info(notification, 'user notification dispatched')
-      await deliverWebhook(notification)
-    },
+  const eventsServer = startEventsServer({
+    port: config.port,
+    webOrigin: config.webOrigin,
+    verifyAuthorizationHeader: createTokenVerifier({ issuer: config.authIssuer, jwksUrl: config.authJwksUrl }),
+    registry,
+    log: logger,
   })
+
+  const pushToOwnerStreams: EnvelopeHandler = async (envelope) => {
+    const ownerId = envelope.payload.ownerId
+    if (!ownerId) return
+    registry.publish(ownerId, envelope.eventType, {
+      eventId: envelope.eventId,
+      eventType: envelope.eventType,
+      fileId: envelope.payload.fileId,
+      message: describeEvent(envelope),
+    })
+  }
+
+  const consumer = await startConsumer([pushToOwnerStreams, sendNotification])
+  logger.info({ port: config.port, webhook: Boolean(config.webhookUrl) }, 'notifier started')
 
   const shutdown = async () => {
+    eventsServer.closeAllConnections()
+    eventsServer.close()
     await consumer.disconnect().catch(() => {})
     process.exit(0)
   }

@@ -36,6 +36,7 @@ Already done:
 - [ ] `notifier` serves `GET /v1/events` (SSE) on the edge network; the gateway routes it; JWT verified at connect
 - [ ] Client reads SSE via `fetch()` streaming + `Bearer` header (not `EventSource`); reconnect loop
 - [ ] Server closes the stream at the token's `exp`; the client reconnects with a fresh token
+  - Prediction: _the stream closes at exp; the client refreshes the token and reconnects within a second._
 - [ ] Document the notifier's edge exposure in `SECURITY.md`
 
 Q&A entries: PKCE and why it exists; CORS preflight on presigned URLs; SSE auth options
