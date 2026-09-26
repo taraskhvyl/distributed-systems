@@ -27,6 +27,30 @@ export async function listFiles() {
   return files
 }
 
+export async function setVisibility(fileId, visibility) {
+  const { file } = await request('PATCH', `/files/${fileId}`, { body: { visibility } })
+  return file
+}
+
+export async function getFeed() {
+  const { files } = await request('GET', '/feed')
+  return files
+}
+
+export async function searchUsers(prefix) {
+  const { users } = await request('GET', `/users?q=${encodeURIComponent(prefix)}`)
+  return users
+}
+
+// Follow and like are states, so the api uses idempotent PUT (on) / DELETE (off).
+export async function setFollowing(username, following) {
+  return request(following ? 'PUT' : 'DELETE', `/users/${encodeURIComponent(username)}/follow`)
+}
+
+export async function setLiked(fileId, liked) {
+  return request(liked ? 'PUT' : 'DELETE', `/files/${fileId}/like`)
+}
+
 export async function getDownloadUrl(fileId) {
   const { url } = await request('POST', `/files/${fileId}/download-url`)
   return url

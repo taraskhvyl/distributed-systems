@@ -3,10 +3,13 @@ import { AUTH_URL, CLIENT_ID, REDIRECT_URI, TOKEN_REFRESH_MARGIN_MS } from './co
 import { log } from './log.js'
 
 const PKCE_STORAGE_KEY = 'pkce'
+// What Keycloak answers to `prompt=none` when it would have to show a page: no SSO session
+// (login_required) or a screen the user must see. Normal outcome, not a failure.
+const SILENT_LOGIN_UNAVAILABLE = new Set(['login_required', 'interaction_required', 'consent_required'])
 
 // Tokens live only in memory. Not localStorage: any XSS could read that and keep it.
-// Cost: a page reload loses them and login bounces through Keycloak again
-// (instant while Keycloak's SSO cookie is valid).
+// Cost: a page reload loses them, so main.js starts a silent login (`prompt=none`), which
+// bounces through Keycloak and back without a click while Keycloak's SSO cookie is valid.
 let session = null // { accessToken, refreshToken, idToken, expiresAt }
 let refreshInFlight = null
 const sessionListeners = new Set()
@@ -24,8 +27,18 @@ export function currentUsername() {
   return session ? decodeJwtPayload(session.accessToken).preferred_username : null
 }
 
-/** Step 1: redirect to Keycloak with a fresh PKCE challenge and CSRF state. */
-export async function login() {
+/** True when this page load is Keycloak redirecting back to us (with a code or an error). */
+export function isLoginCallback() {
+  const params = new URLSearchParams(location.search)
+  return params.has('code') || params.has('error')
+}
+
+/**
+ * Step 1: redirect to Keycloak with a fresh PKCE challenge and CSRF state.
+ * `silent`: adds `prompt=none`, i.e. "log me in only if you already know me (SSO cookie),
+ * never show a form". Used on page load, because a reload wipes the in-memory tokens.
+ */
+export async function login({ silent = false } = {}) {
   // The verifier is the one-time secret. Only its SHA-256 (the challenge) goes into the URL,
   // so a code intercepted from the URL can't be redeemed without the verifier.
   const verifier = randomUrlSafeString()
@@ -33,7 +46,7 @@ export async function login() {
   const challenge = base64Url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)))
 
   // sessionStorage, not memory: the full-page redirect wipes JS state. Read once, then deleted.
-  sessionStorage.setItem(PKCE_STORAGE_KEY, JSON.stringify({ verifier, state }))
+  sessionStorage.setItem(PKCE_STORAGE_KEY, JSON.stringify({ verifier, state, silent }))
 
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -44,20 +57,23 @@ export async function login() {
     code_challenge: challenge,
     code_challenge_method: 'S256',
   })
+  if (silent) params.set('prompt', 'none')
   location.assign(`${AUTH_URL}/auth?${params}`)
 }
 
 /** Step 2: on return from Keycloak, check `state` and exchange the code plus verifier for tokens. */
 export async function completeLoginRedirect() {
+  if (!isLoginCallback()) return
   const params = new URLSearchParams(location.search)
-  const isLoginCallback = params.has('code') || params.has('error')
-  if (!isLoginCallback) return
 
   const saved = JSON.parse(sessionStorage.getItem(PKCE_STORAGE_KEY) ?? 'null')
   sessionStorage.removeItem(PKCE_STORAGE_KEY)
   history.replaceState(null, '', '/') // drop ?code= from the address bar and history
 
-  if (params.has('error')) throw new Error(`login failed: ${params.get('error')}`)
+  const error = params.get('error')
+  const noSsoSession = saved?.silent && SILENT_LOGIN_UNAVAILABLE.has(error)
+  if (noSsoSession) return // not logged in at Keycloak: show the Log in button
+  if (error) throw new Error(`login failed: ${error}`)
   if (!saved || params.get('state') !== saved.state) throw new Error('state mismatch, login rejected')
 
   await requestTokens({

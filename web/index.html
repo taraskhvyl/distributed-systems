@@ -3,33 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>mediashare</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header>
-    <h1>mediashare</h1>
-    <div>
-      <span id="who"></span>
-      <button id="login">Log in</button>
+  <header class="topbar">
+    <span class="brand">mediashare</span>
+    <div class="session">
+      <span id="who" class="muted"></span>
+      <button id="login" class="primary">Log in</button>
       <button id="logout" hidden>Log out</button>
     </div>
   </header>
 
   <main id="app" hidden>
-    <section>
-      <label>Upload: <input type="file" id="file" accept="image/*,text/*,application/pdf"></label>
-      <progress id="progress" max="1" value="0" hidden></progress>
-      <button id="refresh">Refresh list</button>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-panel="panel-files" aria-selected="true">My files</button>
+      <button role="tab" data-panel="panel-feed" aria-selected="false">Feed</button>
+      <button role="tab" data-panel="panel-people" aria-selected="false">People</button>
+      <button id="refresh" class="ghost" title="Reload files and feed">↻ Refresh</button>
+    </nav>
+
+    <section id="panel-files" role="tabpanel" class="panel">
+      <div class="toolbar">
+        <label class="upload primary">
+          Upload a file
+          <input type="file" id="file" accept="image/*,text/*,application/pdf">
+        </label>
+        <progress id="progress" max="1" value="0" hidden></progress>
+      </div>
+      <table class="files">
+        <thead><tr><th></th><th>File</th><th>Status</th><th>Visibility</th><th>Likes</th><th>Size</th><th></th></tr></thead>
+        <tbody id="files"></tbody>
+      </table>
     </section>
-    <table>
-      <thead><tr><th></th><th>File</th><th>Status</th><th>Size</th><th></th></tr></thead>
-      <tbody id="files"></tbody>
-    </table>
+
+    <section id="panel-feed" role="tabpanel" class="panel" hidden>
+      <p id="feed-empty" class="empty">Nothing here yet. Follow someone who has public files.</p>
+      <div id="feed" class="grid"></div>
+    </section>
+
+    <section id="panel-people" role="tabpanel" class="panel" hidden>
+      <form id="user-search" class="toolbar">
+        <input type="search" id="user-query" minlength="1" required placeholder="Find people by username" aria-label="Username prefix">
+        <button class="primary">Search</button>
+      </form>
+      <ul id="users" class="people"></ul>
+    </section>
   </main>
 
-  <h3>Log</h3>
-  <div id="log" role="log"></div>
+  <details class="log-panel">
+    <summary>Log</summary>
+    <div id="log" role="log"></div>
+  </details>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
 
   <script type="module" src="/js/main.js"></script>
 </body>
