@@ -181,6 +181,31 @@ Follow-ups:
   `SameSite` session cookie. JS never sees a token, so XSS can act *as* the user but
   can't steal the token. Cost: a stateful server and CSRF protection.
 
+## Q: How does SSO work across apps, and what does the IdP keep per app?
+
+**A:** After one login Keycloak sets a **session cookie on its own domain**
+(`auth.localhost`). Any other client (`media-web`, `media-cli`, Keycloak's own
+`account-console`) redirects to `/auth`; the browser sends that cookie, so Keycloak returns
+a code **without a form**. One login, many apps; logout can end the session for all.
+
+Experiment (run): log in on `https://app.localhost`, then open
+`https://auth.localhost/realms/media/account`. No password prompt: the gateway log shows
+`/auth` → 302 straight back with a code. It surfaced two bugs worth knowing:
+
+- **Rate limit vs page weight.** The account console loads ~25 static files in one burst,
+  drained the per-IP `edge` bucket, and the `/token` POST right after got 429. Fix:
+  `/resources/` is exempt (`gateway/nginx.conf`), like the web app's static files.
+- **Signature valid ≠ token meant for me.** The Account API returned 401: seeded users
+  had only `user`, not the realm default role, so their tokens carried no
+  `aud: account`. Keycloak's own APIs check `aud`; ours only check `iss` (fine while one
+  product trusts this realm; with several, each service should check `aud`).
+
+Follow-ups:
+- *"Why pin user ids in the realm JSON?"* The api keys users by `sub` (ADR 0002). Keycloak
+  here has no volume, so re-importing the realm minted new `sub`s while postgres kept the
+  old ones, and `UNIQUE (username)` failed (500). Stable ids make the seed match the data
+  it already produced. In production the IdP database is persistent and `sub` never changes.
+
 ## Q: How does CORS work with presigned S3 uploads?
 
 **A:** CORS is enforced **by the browser, not the server**. The server only declares which

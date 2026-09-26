@@ -157,6 +157,8 @@ Two layers with different keys and failure domains:
 
 1. **nginx `limit_req`** — per client IP, coarse (10 r/s, burst 20; 50 r/s for S3).
    Stops obvious floods before they touch application code. Cheap, dumb, effective.
+   Static assets are exempt (the web app, Keycloak `/resources/`): a single page load
+   fetches 10–25 files, which would drain the bucket and 429 the real request after it.
 2. **Redis token bucket per user** (`services/api/src/rate-limit.ts`) — capacity 5,
    refill 0.5/s, applied to mutating methods only. The check-and-decrement runs as a
    **single Lua script** — atomic under Redis's single-threaded execution, so two
