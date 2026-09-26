@@ -31,9 +31,16 @@ make ps        # wait until everything is "healthy"
 make demo      # runs the full end-to-end walkthrough (installs `requests` if needed)
 ```
 
-Requirements: Docker + Docker Compose, Python 3. A wildcard self-signed certificate for
-`*.localhost` is generated under `gateway/certs/` (macOS resolves `*.localhost` to
-127.0.0.1 automatically; on Linux add the names to `/etc/hosts` if needed).
+Requirements: Docker + Docker Compose, Python 3. `make up` generates a local dev CA and a
+server certificate for `app/api/auth/s3.localhost` under `gateway/certs/` (macOS resolves
+`*.localhost` to 127.0.0.1 automatically; on Linux add the names to `/etc/hosts` if needed).
+
+To use the browser app (https://app.localhost) without warnings, trust the CA once, then
+fully quit and reopen the browser:
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain gateway/certs/ca.crt  # macOS
+```
 
 The demo client narrates 13 steps and asserts every behavior:
 

@@ -23,6 +23,21 @@
       "serviceAccountsEnabled": false,
       "redirectUris": ["http://localhost*"],
       "webOrigins": ["+"]
+    },
+    {
+      "clientId": "media-web",
+      "name": "Browser app",
+      "description": "Public SPA client at https://app.localhost. Authorization Code + PKCE (S256 enforced), no password grant.",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://app.localhost/"],
+      "webOrigins": ["https://app.localhost"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://app.localhost/"
+      }
     }
   ],
   "users": [

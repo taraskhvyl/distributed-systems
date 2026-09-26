@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mediashare</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>mediashare</h1>
+    <div>
+      <span id="who"></span>
+      <button id="login">Log in</button>
+      <button id="logout" hidden>Log out</button>
+    </div>
+  </header>
+
+  <main id="app" hidden>
+    <section>
+      <label>Upload: <input type="file" id="file" accept="image/*,text/*,application/pdf"></label>
+      <progress id="progress" max="1" value="0" hidden></progress>
+      <button id="refresh">Refresh list</button>
+    </section>
+    <table>
+      <thead><tr><th></th><th>File</th><th>Status</th><th>Size</th><th></th></tr></thead>
+      <tbody id="files"></tbody>
+    </table>
+  </main>
+
+  <h3>Log</h3>
+  <div id="log" role="log"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

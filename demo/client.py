@@ -238,7 +238,30 @@ def main():
         resp = api(admin_token, args.api_base, "GET", f"/v1/files/{file_id}")
         print(f"    GET after delete: HTTP {resp.status_code} (expected 404)")
 
-    step(13, "list remaining files")
+    step(13, "browser app + CORS: only https://app.localhost may call the api and PUT to S3")
+    app_origin = "https://app.localhost"
+    resp = requests.get(f"{app_origin}/", verify=False, timeout=10)
+    print(f"    GET {app_origin}/: HTTP {resp.status_code}, CSP: {resp.headers.get('Content-Security-Policy', '')[:40]}...")
+    assert resp.status_code == 200 and "Content-Security-Policy" in resp.headers
+
+    def preflight(url, origin, method, headers):
+        return requests.options(url, verify=False, timeout=10, headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": headers,
+        })
+
+    for origin in (app_origin, "https://evil.example"):
+        r = preflight(f"{args.api_base}/v1/files", origin, "GET", "authorization")
+        allowed = r.headers.get("Access-Control-Allow-Origin") == origin
+        print(f"    api preflight from {origin}: HTTP {r.status_code}, browser allows: {allowed}")
+        assert allowed == (origin == app_origin)
+        r = preflight(upload_url, origin, "PUT", "content-type")
+        allowed = r.headers.get("Access-Control-Allow-Origin") == origin
+        print(f"    S3 presigned-PUT preflight from {origin}: HTTP {r.status_code}, browser allows: {allowed}")
+        assert allowed == (origin == app_origin)
+
+    step(14, "list remaining files")
     resp = api(token, args.api_base, "GET", "/v1/files?limit=10")
     files = resp.json()["files"]
     print(f"    {len(files)} file(s): " + ", ".join(f"{f['filename']}={f['status']}" for f in files))

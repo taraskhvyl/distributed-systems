@@ -1,4 +1,5 @@
 import Fastify, { FastifyError } from 'fastify'
+import cors from '@fastify/cors'
 import { Kafka, Producer } from 'kafkajs'
 import { config } from './config.js'
 import { pool } from './db.js'
@@ -46,6 +47,17 @@ async function main() {
       })
     }
     return reply.code(500).send({ error: { code: 'internal', message: 'Internal server error' } })
+  })
+
+  // CORS: lets JS on the web origin call us. Browsers enforce it; curl ignores it.
+  // Registered at the root, so preflights are answered before the auth hook in `routes`
+  // (a preflight never carries the token, it only asks whether sending one is allowed).
+  await app.register(cors, {
+    origin: config.webOrigin, // one exact origin, never '*' together with credentials
+    methods: ['GET', 'POST', 'DELETE'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
+    exposedHeaders: ['Retry-After'], // otherwise JS can't read it on a 429
+    maxAge: 600, // browser caches the preflight for 10 min instead of doubling every request
   })
 
   await app.register(routes, { prefix: '/v1' })

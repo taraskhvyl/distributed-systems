@@ -11,6 +11,7 @@ export const config = {
   kafkaBrokers: (process.env.KAFKA_BROKERS ?? 'kafka:9092').split(','),
   authIssuer: required('AUTH_ISSUER'),
   authJwksUrl: required('AUTH_JWKS_URL'),
+  webOrigin: required('WEB_ORIGIN'),
   s3: {
     region: 'us-east-1',
     internalEndpoint: required('S3_ENDPOINT_INTERNAL'),
