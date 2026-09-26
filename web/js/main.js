@@ -101,6 +101,7 @@ function startLoggedInView() {
     },
     onEvent: (name, data) => {
       log(`event ${name}: ${data.message ?? data.fileId}`)
+      console.info(`[trace] received ${name} traceId=${data.traceId}`)
       if (data.message) ui.showToast(data.message)
       // Events are about your own files (processing done, someone liked one).
       refreshFileList().catch(reportError)

@@ -61,7 +61,9 @@ async function main() {
   await app.register(cors, {
     origin: config.webOrigin, // one exact origin, never '*' together with credentials
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
+    // traceparent: the browser starts the trace (web/js/trace.js). Without it here the
+    // preflight "succeeds" but the browser drops the real request: "Failed to fetch".
+    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'traceparent'],
     exposedHeaders: ['Retry-After'], // otherwise JS can't read it on a 429
     maxAge: 600, // browser caches the preflight for 10 min instead of doubling every request
   })

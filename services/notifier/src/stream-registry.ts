@@ -1,4 +1,7 @@
 import type { ServerResponse } from 'node:http'
+import { trace } from '@opentelemetry/api'
+
+const tracer = trace.getTracer('mediashare-notifier/sse')
 
 /**
  * Registry pattern: the open SSE streams of each user, so an event can be routed to every
@@ -29,11 +32,21 @@ export class StreamRegistry {
     return this.streamsByUser.get(userId)?.size ?? 0
   }
 
-  publish(userId: string, eventName: string, data: unknown): void {
-    const streams = this.streamsByUser.get(userId)
-    if (!streams) return
-    const frame = formatSseEvent(eventName, data)
-    for (const stream of streams) stream.write(frame)
+  /**
+   * Writes the event to every open stream of the user, inside an `sse.publish` span.
+   * The stream was opened long before, so no request carries this trace to the browser:
+   * the span (child of the Kafka consume) records the write, and `traceId` in the frame
+   * lets the browser console name the trace it received. openStreams = 0 means the event
+   * was dropped because the user had no tab connected.
+   */
+  publish(userId: string, eventName: string, data: Record<string, unknown>): void {
+    tracer.startActiveSpan('sse.publish', (span) => {
+      const streams = this.streamsByUser.get(userId) ?? new Set<ServerResponse>()
+      span.setAttributes({ 'sse.user_id': userId, 'sse.event': eventName, 'sse.open_streams': streams.size })
+      const frame = formatSseEvent(eventName, { ...data, traceId: span.spanContext().traceId })
+      for (const stream of streams) stream.write(frame)
+      span.end()
+    })
   }
 }
 

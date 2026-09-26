@@ -1,6 +1,7 @@
 // Calls to the mediashare api, plus the direct-to-S3 upload.
 import { API_URL } from './config.js'
 import { accessToken } from './auth.js'
+import { newTraceparent } from './trace.js'
 
 export class ApiError extends Error {
   constructor(method, path, status) {
@@ -10,7 +11,10 @@ export class ApiError extends Error {
 }
 
 async function request(method, path, { body, headers = {} } = {}) {
-  const requestHeaders = { Authorization: `Bearer ${await accessToken()}`, ...headers }
+  const { traceId, traceparent } = newTraceparent()
+  // Paste the id into Grafana → Explore → Tempo to see this click's whole trace.
+  console.info(`[trace] ${method} ${path} traceId=${traceId}`)
+  const requestHeaders = { Authorization: `Bearer ${await accessToken()}`, traceparent, ...headers }
   if (body !== undefined) requestHeaders['Content-Type'] = 'application/json'
 
   const res = await fetch(`${API_URL}${path}`, {
