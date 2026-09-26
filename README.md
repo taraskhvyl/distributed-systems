@@ -135,6 +135,7 @@ and production dependencies for the runtime image. For editor types locally: `pn
 
 ```bash
 make logs                                                      # follow all services
+make kafka-ui                                                  # read-only Kafka dashboard: http://127.0.0.1:8080
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 --topic file-events --from-beginning
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \

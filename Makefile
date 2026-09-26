@@ -1,4 +1,4 @@
-.PHONY: env certs build up down reset logs ps demo clean
+.PHONY: env certs build up down reset logs ps kafka-ui demo clean
 
 VENV := .venv
 
@@ -17,11 +17,12 @@ up: build
 	@echo "Waiting for services to become healthy: make ps"
 	@echo "Keycloak admin console: https://auth.localhost/admin (admin / KEYCLOAK_ADMIN_PASSWORD)"
 
+# --profile tools: also stop opt-in tools (kafka-ui); `down` ignores inactive profiles.
 down:
-	docker compose down
+	docker compose --profile tools down
 
 reset:
-	docker compose down -v
+	docker compose --profile tools down -v
 	@echo "Volumes wiped. TLS certs kept (make certs to regenerate)."
 
 logs:
@@ -29,6 +30,10 @@ logs:
 
 ps:
 	docker compose ps
+
+kafka-ui:
+	docker compose --profile tools up -d --wait kafka-ui
+	@echo "Kafka UI (read-only): http://127.0.0.1:8080"
 
 demo: $(VENV)/.stamp
 	$(VENV)/bin/python demo/client.py

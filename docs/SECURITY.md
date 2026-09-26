@@ -50,7 +50,10 @@ Two Docker networks stand in for VPC subnets + security groups:
 - **edge** = public subnet. Hosts the gateway, keycloak, api, notifier, and storage's S3 endpoint.
 - **data** = private subnet. Postgres, Kafka, Redis, storage, and the workers.
 
-Only the gateway publishes a host port (443). Even so, the gateway's network membership
+Only the gateway publishes a host port (443), plus the opt-in Kafka UI (`make kafka-ui`,
+profile `tools`) on **127.0.0.1:8080 only**: a Kafka admin UI can read every message, so it
+sits on `data`, is never routed through the gateway, and runs read-only. In production it
+would live behind SSO/VPN, if at all. Even so, the gateway's network membership
 limits its *east-west* blast radius: it has no route to Postgres/Kafka/Redis. The processor
 lives only on `data`, so the internet cannot address it at all.
 

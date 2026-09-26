@@ -59,6 +59,7 @@ make up      # .env + TLS certs + build + start (only gateway :443 is exposed)
 make ps      # wait until everything is healthy
 make demo    # end-to-end walkthrough (demo/client.py); this is the main test
 make logs    # follow all services
+make kafka-ui  # opt-in read-only Kafka dashboard on http://127.0.0.1:8080 (profile tools)
 make down    # stop, keep data
 make reset   # stop + wipe volumes (needed after editing db/init/*)
 docker compose up -d --build <service>   # rebuild one service after a code change
