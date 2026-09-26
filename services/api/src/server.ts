@@ -1,4 +1,4 @@
-import Fastify from 'fastify'
+import Fastify, { FastifyError } from 'fastify'
 import { Admin, Kafka, Producer } from 'kafkajs'
 import { config } from './config.js'
 import { pool } from './db.js'
@@ -62,7 +62,7 @@ async function main() {
     }
   })
 
-  app.setErrorHandler((err, req, reply) => {
+  app.setErrorHandler<FastifyError>((err, req, reply) => {
     req.log.error({ err }, 'unhandled error')
     if (err.validation) {
       return reply.code(400).send({

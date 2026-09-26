@@ -115,5 +115,7 @@ Pick in any order; suggested: d → a → e → c.
 - [ ] **a) CDC with Debezium** instead of outbox polling: compare latency and moving parts
 - [ ] **e) Multi-region**: written design exercise only (what replicates, what's the source of truth)
 - [ ] **c) KEDA on k8s** (kind/k3d): autoscale processors on consumer lag
+- [ ] **f) Replace kafkajs** (unmaintained since 2023; logs `TimeoutNegativeWarning` on Node 24) with
+  `@confluentinc/kafka-javascript` in the api relay and notifier
 
 Out of scope: keyset pagination and multipart uploads. They're API design, not distributed systems.

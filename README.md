@@ -67,13 +67,13 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 |------------|----------------|------------------------------------------------------------------|
 | gateway    | nginx          | TLS termination, host routing, per-IP rate limit, security headers |
 | keycloak   | Keycloak 26    | OIDC identity provider, issues JWTs                              |
-| api        | Node 20 + TS (Fastify) | public REST API: auth, presigned URLs, idempotency, outbox relay |
-| processor  | Python 3.12    | Kafka consumer: malware scan, thumbnails, retry/DLQ, idempotent CAS claim |
-| notifier   | Node 20 + TS   | second Kafka consumer group: user notifications / webhooks       |
-| postgres   | Postgres 16    | file metadata + outbox table, least-privilege per-service roles  |
-| kafka      | Kafka 3.9 (KRaft) | event backbone: `file-events`, `-retry`, `-dlq`              |
+| api        | Node 24 + TS (Fastify 5) | public REST API: auth, presigned URLs, idempotency, outbox relay |
+| processor  | Python 3.14    | Kafka consumer: malware scan, thumbnails, retry/DLQ, idempotent CAS claim |
+| notifier   | Node 24 + TS   | second Kafka consumer group: user notifications / webhooks       |
+| postgres   | Postgres 18    | file metadata + outbox table, least-privilege per-service roles  |
+| kafka      | Kafka 4.3 (KRaft) | event backbone: `file-events`, `-retry`, `-dlq`              |
 | storage    | SeaweedFS 4.47 | S3-compatible object store: private + public buckets, scoped IAM identities |
-| redis      | Redis 7        | per-user token-bucket rate limiting (atomic Lua script)          |
+| redis      | Redis 8        | per-user token-bucket rate limiting (atomic Lua script)          |
 
 ## API surface (all behind `https://api.localhost`)
 

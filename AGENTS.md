@@ -37,9 +37,9 @@ There is no unit test suite. `make demo` asserts every flow.
 
 ## Architecture
 
-- `services/api`: Node 20 + TS (Fastify). Auth (Keycloak JWT), presigned S3 URLs,
+- `services/api`: Node 24 + TS (Fastify 5). Auth (Keycloak JWT), presigned S3 URLs,
   idempotency keys, transactional outbox relay (`src/outbox.ts`).
-- `services/processor`: Python 3.12 Kafka consumer. Scan + thumbnail, CAS claim, retry/DLQ,
+- `services/processor`: Python 3.14 Kafka consumer. Scan + thumbnail, CAS claim, retry/DLQ,
   expired-claim reaper (`src/consumer.py`, `src/db.py`).
 - `services/notifier`: Node consumer, separate consumer group.
 - `gateway/nginx.conf`: TLS, host routing, per-IP rate limit.
