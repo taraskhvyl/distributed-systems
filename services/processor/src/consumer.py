@@ -142,6 +142,36 @@ class Processor:
             )
             self._producer.flush(10)
 
+    def reap_expired_claims(self) -> None:
+        # Kafka redelivery alone can't recover a crashed claim: the redelivered event
+        # arrives while the lease is still live, gets skipped, and its offset is committed.
+        # So once the lease expires we re-enqueue the work ourselves, on the retry topic
+        # (processor-only; the notifier never sees a duplicate file.uploaded).
+        # ponytail: a file that crashes the worker every time is re-queued forever;
+        # add an attempts column and route to the DLQ if that shows up.
+        for row in self._store.reap_expired(self._cfg.claim_lease_seconds):
+            file_id = str(row["id"])
+            logger.warning("expired claim reaped, re-enqueued", extra={"ctx": {"fileId": file_id}})
+            self._producer.produce(
+                self._cfg.topic_retry,
+                key=file_id,
+                value=json.dumps({
+                    "eventId": str(uuid.uuid4()),
+                    "eventType": "file.uploaded",
+                    "aggregateId": file_id,
+                    "occurredAt": _now_iso(),
+                    "payload": {
+                        "fileId": file_id,
+                        "objectKey": row["object_key"],
+                        "ownerId": row["owner_id"],
+                        "filename": row["filename"],
+                        "contentType": row["content_type"],
+                        "sizeBytes": row["size_bytes"],
+                    },
+                }),
+            )
+        self._producer.flush(10)
+
     def _emit(self, event_type: str, aggregate_id: str, payload: dict) -> None:
         envelope = {
             "eventId": str(uuid.uuid4()),

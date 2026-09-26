@@ -22,6 +22,9 @@ class Config:
     topic_retry: str
     topic_dlq: str
     max_attempts: int = 3
+    # Must exceed the slowest legitimate job, or a live worker's claim gets reaped.
+    claim_lease_seconds: int = 120
+    reap_interval_seconds: int = 30
 
 
 def load() -> Config:

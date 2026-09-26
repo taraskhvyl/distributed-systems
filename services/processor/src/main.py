@@ -1,4 +1,5 @@
 import json
+import time
 
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
@@ -37,8 +38,16 @@ def main() -> None:
         }},
     )
 
+    next_reap = 0.0
     try:
         while True:
+            if time.monotonic() >= next_reap:
+                try:
+                    processor.reap_expired_claims()
+                except Exception:
+                    logger.exception("claim reaper failed, will retry next interval")
+                next_reap = time.monotonic() + cfg.reap_interval_seconds
+
             msg = consumer.poll(1.0)
             if msg is None:
                 continue

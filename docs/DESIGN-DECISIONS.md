@@ -97,6 +97,17 @@ and the offset is committed — one bad event must not wedge a partition
 from bring-up debugging — open it live:
 `docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic file-events-dlq --from-beginning`.
 
+**What if the worker dies mid-job** (`kill -9`, OOM)? `release()` never runs, and
+Kafka redelivery alone doesn't help: the redelivered event hits a row that is still
+`processing`, the CAS claim fails, the event is skipped, and its offset is committed.
+So the claim is a **lease**. `updated_at` is stamped at claim time, and every 30 s each
+processor runs a reaper that resets claims older than 120 s back to `uploaded` and
+re-enqueues a `file.uploaded` on the retry topic (`reap_expired` in
+`services/processor/src/db.py`). The reset is one atomic `UPDATE ... RETURNING`, so
+concurrent reapers never double-enqueue. The cost is that a worker that is *slow* rather
+than dead loses its lease and the job runs twice. That's harmless here because outputs
+are deterministic, but a system with side effects would need fencing tokens.
+
 Honest gap: the retry topic has no backoff delay — a proper version uses wait-planes
 (topics with time-delayed consumption) or a scheduled retry.
 

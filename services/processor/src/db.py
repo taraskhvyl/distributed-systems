@@ -17,6 +17,19 @@ class FileStore:
             )
             return cur.rowcount == 1
 
+    def reap_expired(self, lease_seconds: int) -> list[dict]:
+        # A claim is a lease: updated_at is stamped by claim(), and a worker that dies
+        # mid-job never calls release(). Reset expired claims so the work can be re-claimed.
+        # The UPDATE is atomic per row, so concurrent reapers never return the same file twice.
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "UPDATE files SET status = 'uploaded', updated_at = now() "
+                "WHERE status = 'processing' AND updated_at < now() - make_interval(secs => %s) "
+                "RETURNING id, object_key, owner_id, filename, content_type, size_bytes",
+                (lease_seconds,),
+            )
+            return cur.fetchall()
+
     def release(self, file_id: str) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
