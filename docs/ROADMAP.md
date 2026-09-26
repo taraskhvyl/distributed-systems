@@ -25,12 +25,14 @@ Already done:
 
 ### 1a. Browser UI + live status
 
-- [ ] `app.localhost`: a single static `index.html` + vanilla JS served by the gateway (no build step)
-- [ ] Keycloak client `media-web` (public, standard flow); **hand-written PKCE** (WebCrypto), tokens in memory only, refresh before expiry
-- [ ] **CORS** on the api and on SeaweedFS (the browser PUTs directly to presigned S3 URLs)
+- [x] `app.localhost`: a single static `index.html` + vanilla JS served by the gateway (no build step)
+- [x] Keycloak client `media-web` (public, standard flow); **hand-written PKCE** (WebCrypto), tokens in memory only, refresh before expiry
+- [x] **CORS** on the api and on SeaweedFS (the browser PUTs directly to presigned S3 URLs)
   - Prediction: what does the preflight for a presigned PUT look like, and which side rejects it first?
-    _Api without CORS: preflight fails, the GET is never sent. Presigned PUT: SeaweedFS rejects the preflight._
-- [ ] Upload from the browser with a progress bar
+    _Api without CORS: preflight fails, the GET is never sent._ **Correct.**
+    _Presigned PUT: SeaweedFS rejects the preflight._ **Wrong for SeaweedFS** (`-s3.allowedOrigins`
+    defaults to `*`), **right for AWS S3** (no bucket CORS rule = every preflight rejected).
+- [x] Upload from the browser with a progress bar
 - [ ] `notifier` serves `GET /v1/events` (SSE) on the edge network; the gateway routes it; JWT verified at connect
 - [ ] Client reads SSE via `fetch()` streaming + `Bearer` header (not `EventSource`); reconnect loop
 - [ ] Server closes the stream at the token's `exp`; the client reconnects with a fresh token

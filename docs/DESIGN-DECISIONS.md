@@ -139,8 +139,79 @@ internal (`http://keycloak:8080/...`) while the `iss` claim is the external
 (`services/api/src/auth.ts`, `services/api/src/config.ts`).
 
 Related details: why 404 instead of 403 on other people's files (existence leak), why the
-demo's password grant would be auth-code + PKCE in a browser, and why logout/revocation
-is JWTs' weak spot (short TTL + refresh rotation is the standard answer).
+CLI demo uses the password grant while the browser app uses auth-code + PKCE (next
+answer), and why logout/revocation is JWTs' weak spot (short TTL + refresh rotation is
+the standard answer).
+
+## Q: What is PKCE and why does a browser app need it?
+
+**A:** A browser app is a **public client**: anything shipped to the browser is readable,
+so it can't hold a client secret. Without a secret, whoever holds the authorization
+`code` can redeem it for tokens, and the code travels through the most leak-prone place
+there is: the URL (history, logs, other apps, malicious extensions).
+
+PKCE (RFC 7636) replaces the static secret with a **one-time secret per login**
+(`web/app.js`, `login()` / `handleRedirect()`):
+
+1. The app makes a random `code_verifier` and sends only `code_challenge = SHA-256(verifier)`
+   in the `/auth` redirect.
+2. Keycloak stores the challenge with the issued code.
+3. At `/token` the app sends the verifier; Keycloak hashes it and compares.
+
+An intercepted code is useless without the verifier, and the verifier never touched the
+URL. `state` is a separate thing: it binds the callback to the login *this* tab started
+(login CSRF). The `media-web` client **enforces** S256 (`keycloak/media-realm.json`);
+a request without a challenge gets `invalid_request`.
+
+Follow-ups:
+- *"Where do tokens live?"* In a JS variable only. `localStorage` survives forever and any
+  XSS can read it; memory limits theft to the XSS's lifetime. The strict CSP on
+  `app.localhost` (`gateway/nginx.conf`) is the XSS mitigation. Cost: a reload means a
+  (silent, SSO-cookie) round trip through Keycloak.
+- *"How do you refresh?"* Lazily, 30 s before expiry, at the moment a token is needed
+  (`accessToken()`), with one shared in-flight refresh. Timers are unreliable: background
+  tabs throttle them and laptops sleep.
+- *"Production-grade?"* A **BFF** (backend-for-frontend): a server-side component does the
+  OAuth flow as a *confidential* client and gives the browser only an `HttpOnly`,
+  `SameSite` session cookie. JS never sees a token, so XSS can act *as* the user but
+  can't steal the token. Cost: a stateful server and CSRF protection.
+
+## Q: How does CORS work with presigned S3 uploads?
+
+**A:** CORS is enforced **by the browser, not the server**. The server only declares which
+origin may read its responses; curl and the Python demo ignore it entirely.
+
+A request with a non-simple method (`PUT`, `DELETE`) or header (`Authorization`,
+`Content-Type: application/json`) triggers a **preflight**: `OPTIONS` with `Origin`,
+`Access-Control-Request-Method` and `-Headers`. Only if the answer names our origin and
+allows that method and those headers does the browser send the real request.
+
+What we saw, in order:
+1. **api without CORS**: `OPTIONS /v1/files` → 404 with no `Access-Control-*`. The gateway
+   log shows *only* the OPTIONS; the `GET` never left the browser. JS sees only
+   `Failed to fetch`: it is not allowed to learn why.
+2. **api with `@fastify/cors`** (`services/api/src/server.ts`): one exact origin from
+   `WEB_ORIGIN`, allowed headers `Authorization, Content-Type, Idempotency-Key`,
+   `exposedHeaders: Retry-After` (else JS can't read it on a 429), `maxAge: 600` so each
+   call doesn't cost two round trips. Preflights are answered before the auth hook: they
+   never carry a token.
+3. **Presigned PUT** to `s3.localhost`: `Content-Type: image/png` makes it non-simple, so
+   there is a preflight to the *storage* origin. The prediction was "SeaweedFS rejects it".
+   Wrong for SeaweedFS (its `-s3.allowedOrigins` defaults to `*`, reflecting any Origin),
+   right for **AWS S3**, which rejects every preflight until the bucket has a CORS rule.
+   We now pin `-s3.allowedOrigins=https://app.localhost` (`docker-compose.yml`); on AWS it
+   is a per-bucket rule managed as code (Terraform `aws_s3_bucket_cors_configuration`).
+
+Follow-ups:
+- *"Is CORS a security boundary for S3 here?"* No. The SigV4 signature is. CORS decides
+  which *pages* may read responses; a presigned URL is a bearer capability either way.
+- *"Why did an evil-origin preflight to the api get 204?"* The api answers with a fixed
+  `Access-Control-Allow-Origin: https://app.localhost`; the browser compares it to its own
+  origin and blocks. The server doesn't reject; it declares.
+- *"`*` with credentials?"* Forbidden by the spec. Our requests use a bearer header, not
+  cookies, so no `Allow-Credentials` is needed at all.
+
+`make demo` step 13 asserts allow/deny for both the api and the presigned PUT.
 
 ## Q: How would you rate-limit this? 
 
