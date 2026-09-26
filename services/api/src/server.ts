@@ -1,5 +1,5 @@
 import Fastify, { FastifyError } from 'fastify'
-import { Admin, Kafka, Producer } from 'kafkajs'
+import { Kafka, Producer } from 'kafkajs'
 import { config } from './config.js'
 import { pool } from './db.js'
 import { connectRedis, redisPing } from './rate-limit.js'
@@ -15,30 +15,6 @@ async function retry<T>(fn: () => Promise<T>, attempts = 20, delayMs = 3000): Pr
       console.error(`retryable failure (${i}/${attempts}), retrying in ${delayMs}ms`, err)
       await new Promise((r) => setTimeout(r, delayMs))
     }
-  }
-}
-
-async function ensureTopics(admin: Admin): Promise<void> {
-  await admin.connect()
-  try {
-    await admin.createTopics({
-      topics: [
-        { topic: 'file-events', numPartitions: 3, replicationFactor: 1 },
-        { topic: 'file-events-retry', numPartitions: 3, replicationFactor: 1 },
-        {
-          topic: 'file-events-dlq',
-          numPartitions: 1,
-          replicationFactor: 1,
-          configEntries: [{ name: 'retention.ms', value: '604800000' }],
-        },
-      ],
-      waitForLeaders: true,
-    })
-  } catch (err) {
-    const message = String(err)
-    if (!message.includes('already exists')) throw err
-  } finally {
-    await admin.disconnect()
   }
 }
 
@@ -81,7 +57,6 @@ async function main() {
   })
   const producer: Producer = kafka.producer()
   await retry(() => producer.connect())
-  await retry(() => ensureTopics(kafka.admin()))
   await retry(() => connectRedis())
 
   startOutboxRelay(pool, producer, app.log, config.topicMain)
