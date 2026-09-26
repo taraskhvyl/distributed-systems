@@ -54,5 +54,7 @@ There is no unit test suite. `make demo` asserts every flow.
 - The processor DB role only has `SELECT, UPDATE` on `files`. It cannot write the outbox.
 - Networks: the gateway is on `edge` only and cannot reach postgres/kafka/redis. Keep it that way.
 - Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS). Keep them in sync with the code.
+- `CONTEXT.md` is the domain glossary (File, Published file, Feed, Lease…). Use its terms;
+  update it when a term is settled.
 - `docs/adr/` records decisions that are hard to reverse, surprising, and a real trade-off.
   Read the relevant ADR before "fixing" something that looks odd.

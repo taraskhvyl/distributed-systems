@@ -8,37 +8,73 @@ explain out loud. Before each run, write a one-line prediction ("I expect…"). 
 is where the learning happens.
 
 Ground rules:
-- Runtime is **Docker Compose** for Phases 1–3. Kubernetes appears only as an optional Phase 4 topic.
+- Runtime is **Docker Compose** for Phases 1–4. Kubernetes appears only as an optional Phase 5 topic.
 - Observability grows **with the experiments**: a metric is added in the phase whose experiment needs it.
 - Schema changes: edit `db/init/02-schema.sql` + `make reset`. No migration tool until one is needed.
 - Instrumentation speaks OTLP only; the backend is swappable.
+- `make demo` must pass after every sub-phase. Every new endpoint gets a demo step.
+- Domain terms (File, Published file, Feed, …) are defined in [CONTEXT.md](../CONTEXT.md).
 
 Already done:
 - [x] Processor claim is a lease; the reaper recovers work from crashed workers
-  (`services/processor/src/db.py` `reap_expired`)
+  ([ADR-0001](adr/0001-processing-claims-are-leases.md))
 
 ---
 
-## Phase 1 — Tracing
+## Phase 1 — Make it interactive
 
-Follow one upload through gateway → api → outbox → Kafka → processor → notifier as a single trace.
+### 1a. Browser UI + live status
+
+- [ ] `app.localhost`: a single static `index.html` + vanilla JS served by the gateway (no build step)
+- [ ] Keycloak client `media-web` (public, standard flow); **hand-written PKCE** (WebCrypto), tokens in memory only, refresh before expiry
+- [ ] **CORS** on the api and on SeaweedFS (the browser PUTs directly to presigned S3 URLs)
+  - Prediction: what does the preflight for a presigned PUT look like, and which side rejects it first? _
+- [ ] Upload from the browser with a progress bar
+- [ ] `notifier` serves `GET /v1/events` (SSE) on the edge network; the gateway routes it; JWT verified at connect
+- [ ] Client reads SSE via `fetch()` streaming + `Bearer` header (not `EventSource`); reconnect loop
+- [ ] Server closes the stream at the token's `exp`; the client reconnects with a fresh token
+- [ ] Document the notifier's edge exposure in `SECURITY.md`
+
+Q&A entries: PKCE and why it exists; CORS preflight on presigned URLs; SSE auth options
+(fetch vs ticket vs query-string); BFF as the production-hardening answer.
+
+### 1b. Social features
+
+- [ ] File **Visibility** (`private` default / `public`); non-owners can see and download **Published files** only
+- [ ] Follow / unfollow (one-directional, no approval)
+- [ ] Feed (**fan-out on read**: one SQL query over follows + published files)
+- [ ] Likes: `likes (user_id, file_id)` PK, `like_count` updated in the same transaction, `file.liked` outbox event → SSE to the owner
+- [ ] UI: feed, follow button, like button, live notifications
+
+Q&A entries: fan-out on read vs write; idempotent likes.
+
+## Phase 2 — Tracing
+
+Follow one action through browser → gateway → api → outbox → Kafka → consumer → SSE as a single trace.
 
 - [ ] Add `grafana/otel-lgtm` to compose (data network only)
 - [ ] Auto-instrument api + notifier (Fastify, pg, ioredis, kafkajs); Python SDK in processor with spans around scan/thumbnail
 - [ ] Propagate `traceparent` **across the outbox**: store it in an outbox column in the same transaction, relay sets it as a Kafka header, consumers continue the trace
   - Prediction: _
+- [ ] Trace a like end to end: api → outbox → Kafka → notifier → SSE to the owner's browser
 - [ ] `trace_id` in every log line (pino + `JsonFormatter`); jump trace → logs in Grafana
 - [ ] nginx passes through `traceparent`
 
 Key idea: auto-propagation breaks at async boundaries. Context must travel *with the data*.
 
-## Phase 2 — Scaling (under load)
+## Phase 3 — Scaling (under load)
 
-- [ ] **k6 script** replaying the demo flow; baseline on 1 replica. Where is the first bottleneck?
+- [ ] **k6 script** replaying upload + feed + like flows; baseline on 1 replica. Where is the first bottleneck?
   - Prediction: _
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
   - Prediction: _
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric.** Watch rebalances.
+  - Prediction: _
+- [ ] `--scale notifier=3`: SSE events go missing (the partition's consumer isn't the instance holding the connection). Fix with Redis pub/sub fan-out.
+  - Prediction: _
+- [ ] **Feed at scale**: seed thousands of follows; fan-out-on-read p99 blows up → fan-out on write (`feed-writer` consumer, Redis sorted set per user) → one user with 50k followers spikes lag → hybrid
+  - Prediction: _
+- [ ] **Hot key**: hammer likes on one viral file; row-lock contention caps throughput regardless of replicas → sharded counters → Redis `INCR` + periodic flush (exact vs approximate)
   - Prediction: _
 - [ ] Increase to 6 partitions: key→partition remapping, effect on per-file ordering
   - Prediction: _
@@ -49,7 +85,7 @@ Key idea: auto-propagation breaks at async boundaries. Context must travel *with
 
 Key idea: fixing a bottleneck moves it. Parallelism is capped by partitions, not replicas.
 
-## Phase 3 — Failure injection
+## Phase 4 — Failure injection
 
 Run in this order; each builds on the last.
 
@@ -63,7 +99,7 @@ Run in this order; each builds on the last.
   - Prediction: _
 - [ ] **Retry backoff**: delayed retry topics (`retry-5s`, `retry-1m`) + DLQ replay tool
   - Prediction: _
-- [ ] **Graceful shutdown**: redeploy during k6 with zero failed requests
+- [ ] **Graceful shutdown**: redeploy during k6 with zero failed requests (including open SSE streams)
   - Prediction: _
 - [ ] **Zero-downtime schema change** (expand/contract) during k6 across 2 api replicas
   - Prediction: _
@@ -71,12 +107,11 @@ Run in this order; each builds on the last.
 
 Key idea: every guarantee has a failure mode; find it by breaking it on purpose.
 
-## Phase 4 — Advanced topics (menu)
+## Phase 5 — Advanced topics (menu)
 
-Pick in any order; suggested: d → b → a → e → c.
+Pick in any order; suggested: d → a → e → c.
 
 - [ ] **d) Per-user storage quotas**: consistent counters under concurrency (check-then-act races, reserve/commit)
-- [ ] **b) Push notifications (SSE) across N notifiers**: route to the instance holding the connection (Redis pub/sub)
 - [ ] **a) CDC with Debezium** instead of outbox polling: compare latency and moving parts
 - [ ] **e) Multi-region**: written design exercise only (what replicates, what's the source of truth)
 - [ ] **c) KEDA on k8s** (kind/k3d): autoscale processors on consumer lag

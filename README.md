@@ -106,7 +106,7 @@ curl -k https://s3.localhost/media-thumbnails/<thumbKey>        # public bucket,
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — components, data flows, topics, state machine
 - [docs/SECURITY.md](docs/SECURITY.md) — threat model and every control, with trade-offs
 - [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) — Q&A walkthrough of every design decision, mapped to concrete code paths
-- [docs/ROADMAP.md](docs/ROADMAP.md) — learning roadmap: tracing → scaling → failure injection → advanced topics
+- [docs/ROADMAP.md](docs/ROADMAP.md) — learning roadmap: interactive UI → tracing → scaling → failure injection → advanced topics
 
 ## Teardown
 
