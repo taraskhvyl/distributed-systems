@@ -1,0 +1,54 @@
+{
+  "realm": "media",
+  "enabled": true,
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "roles": {
+    "realm": [
+      { "name": "user" },
+      { "name": "admin" }
+    ],
+    "client": {}
+  },
+  "defaultRoles": ["user"],
+  "clients": [
+    {
+      "clientId": "media-cli",
+      "name": "Demo CLI client",
+      "description": "Public client used by the demo script. Password grant for demo purposes; a real SPA would use Authorization Code + PKCE.",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost*"],
+      "webOrigins": ["+"]
+    }
+  ],
+  "users": [
+    {
+      "username": "demo",
+      "enabled": true,
+      "email": "demo@localhost",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "User",
+      "credentials": [
+        { "type": "password", "value": "demo-pass", "temporary": false }
+      ],
+      "realmRoles": ["user"]
+    },
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@localhost",
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "User",
+      "credentials": [
+        { "type": "password", "value": "admin-pass", "temporary": false }
+      ],
+      "realmRoles": ["user", "admin"]
+    }
+  ]
+}
