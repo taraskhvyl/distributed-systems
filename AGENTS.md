@@ -14,6 +14,38 @@ Whenever you add, change, or remove something, explain it to the user in your re
 Keep it short and concrete. Point at `file:line`, and don't lecture.
 When a change affects a documented design decision, update `docs/DESIGN-DECISIONS.md` too.
 
+## Code principles (always)
+
+This code is read to learn from, so **readability beats brevity**. When a "shortest diff"
+habit conflicts with these rules, these rules win.
+
+- **KISS.** The simplest design that meets today's requirement. No speculative
+  abstractions or config for values that never change. Simple ≠ terse: prefer a few clear
+  lines over one clever line.
+- **DRY.** One source of truth for each piece of logic and config:
+  - Logic used in two places gets extracted and named, not copy-pasted.
+  - Repeated values (origins, issuer URLs, topic names) are defined once
+    (a config module, a compose `x-` anchor, env) and referenced.
+  - If duplication across services is deliberate (shared libs couple deploys), say so in
+    a comment at both sites.
+- **Single responsibility.** One module = one job. Keep transport (HTTP/SSE routing),
+  auth, domain logic, messaging, and UI rendering in separate modules/functions.
+- **Patterns where the problem has that shape.** Use a known pattern and name it in a
+  one-line comment when it fits, e.g. a *Registry* for live connections, *Strategy*/handler
+  map for per-event behavior, *Adapter* around external clients (S3, Kafka), *Repository*
+  for DB access. Don't force a pattern onto a problem that doesn't have its shape.
+- **Scalability-aware.** Anything that breaks with more than one replica (in-memory state,
+  local timers, single consumers) is marked with a comment naming the limit and the fix.
+- **Readable code:**
+  - Descriptive names. A boolean condition longer than one clause gets a named
+    variable or function.
+  - Small functions (roughly one screen), early returns, no nested ternaries.
+  - No cryptic idioms (`return void x`, dense chained expressions, magic numbers).
+    Name constants.
+  - Comments explain *why*, not *what*.
+- **Consistency.** Match the existing structure of the service you touch. If a
+  change makes a file mix concerns, split it as part of that change.
+
 ## Roadmap
 
 Work follows `docs/ROADMAP.md` in order. Before each experiment, ask the user for their
