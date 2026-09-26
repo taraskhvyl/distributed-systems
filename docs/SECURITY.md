@@ -53,7 +53,9 @@ Two Docker networks stand in for VPC subnets + security groups:
 Only the gateway publishes a host port (443), plus the opt-in Kafka UI (`make kafka-ui`,
 profile `tools`) on **127.0.0.1:8080 only**: a Kafka admin UI can read every message, so it
 sits on `data`, is never routed through the gateway, and runs read-only. In production it
-would live behind SSO/VPN, if at all. Even so, the gateway's network membership
+would live behind SSO/VPN, if at all. Grafana (`lgtm`) follows the same rule on
+**127.0.0.1:3000**: it has anonymous admin and every log line, so it is never exposed beyond
+loopback. Even so, the gateway's network membership
 limits its *east-west* blast radius: it has no route to Postgres/Kafka/Redis. The processor
 lives only on `data`, so the internet cannot address it at all.
 
@@ -185,13 +187,23 @@ Production path: a real secret manager (Vault/Secrets Manager/SOPS), short-lived
 credentials, rotation, and no plaintext env in CI logs. Keycloak passwords in the realm
 JSON are demo seeds — production uses pre-hashed passwords or an external IdP.
 
+## Trace context from clients
+
+The api accepts the browser's `traceparent` header (the trace starts in the browser), so a
+client chooses its own trace id and the "sampled" flag. Risks: a client can force every
+request to be recorded (telemetry cost, a DoS lever) or reuse another trace's id to inject
+spans into it. Accepted here because it is a lab and the ids carry no authority. In
+production the edge restarts the trace for untrusted callers (or keeps the client id only
+as a link) and applies its own sampling. The SSE frame's `traceId` is an id, not a secret.
+
 ## Production hardening checklist (deliberately out of scope here)
 
 - WAF in front of the gateway (the nginx layer is not a WAF)
 - mTLS or a service mesh for east-west traffic
 - S3: SSE-KMS at rest, versioning + object lock on uploads, lifecycle to cold storage
 - Postgres: PITR backups, encryption at rest, connection via IAM auth (RDS IAM)
-- Observability: OpenTelemetry tracing (the `eventId` already gives you correlation ids)
+- Observability: tracing exists (see ARCHITECTURE "Tracing"); production adds sampling,
+  retention, auth on Grafana, and PII scrubbing of span attributes and logs
 - Audit log as a first-class stream (who downloaded/presigned what)
 - Quotas per user (storage caps), not just request rate limits
 - CI: image scanning, dependency audit, SAST, signed images

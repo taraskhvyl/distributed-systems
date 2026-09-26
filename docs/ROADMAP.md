@@ -72,10 +72,20 @@ Follow one action through browser → gateway → api → outbox → Kafka → c
 - [ ] Add `grafana/otel-lgtm` to compose (data network only)
 - [ ] Auto-instrument api + notifier (Fastify, pg, ioredis, kafkajs); Python SDK in processor with spans around scan/thumbnail
 - [ ] Propagate `traceparent` **across the outbox**: store it in an outbox column in the same transaction, relay sets it as a Kafka header, consumers continue the trace
-  - Prediction: _
+  - Prediction (before, plain auto-instrumentation): one trace, "the Kafka instrumentation passes it along".
+  - Outcome: **two traces**. Trace 1 = `PUT /v1/files/:id/like` → pg queries → `COMMIT` (the
+    outbox INSERT is in it), then nothing. Trace 2 is rooted at the relay's `send file-events`
+    and continues into the notifier's `process file-events`. Kafka itself propagated fine
+    (kafkajs header); the break is the outbox: the relay's timer has no request context.
+    Side finding: every 250 ms relay tick made 4 orphan root traces (BEGIN/SELECT/COMMIT/connect).
 - [ ] Trace a like end to end: api → outbox → Kafka → notifier → SSE to the owner's browser
 - [ ] `trace_id` in every log line (pino + `JsonFormatter`); jump trace → logs in Grafana
 - [ ] nginx passes through `traceparent`
+  - Browser starts the trace (`web/js/trace.js`). Prediction (sending it without a CORS change): like fails.
+  - Outcome: correct. The preflight still returns 204, but `Access-Control-Allow-Headers` lacks
+    `traceparent`, so the browser drops the real request ("Failed to fetch") and the api logs
+    nothing. After adding it: a hand-made `traceparent` sent through the gateway came back in
+    Tempo under the same trace id, api root span parented to the sent span id. nginx passes it untouched.
 
 Key idea: auto-propagation breaks at async boundaries. Context must travel *with the data*.
 

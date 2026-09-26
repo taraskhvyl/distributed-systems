@@ -17,6 +17,7 @@ Three tiers, two networks, one exposed port.
                  api, notifier, storage also attach to:
 ┌──────────────────────────────────▼─ data network ─────────────────────┐
 │  postgres   redis   kafka   storage   api   processor   notifier      │
+│  lgtm (traces/logs; Grafana on 127.0.0.1:3000 only)                   │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -33,6 +34,7 @@ Network rules (enforced by Docker, mirroring VPC subnets + security groups):
 | redis      | ✖    | ✔    | api                            | —                               |
 | processor  | ✖    | ✔    | internal only                  | postgres, kafka, storage        |
 | notifier   | ✔    | ✔    | gateway (`/v1/events` only)    | kafka, keycloak, webhook egress |
+| lgtm       | ✖    | ✔    | api, processor, notifier (OTLP); host loopback :3000 | — |
 
 The gateway is *physically incapable* of reaching the database, Kafka, or Redis. Even if
 nginx were fully compromised, data stores are unreachable from it. The processor is not on
@@ -108,7 +110,8 @@ keeps an SSE stream to `GET /v1/events` (notifier), which forwards every event w
 `idempotency_key` with a **partial unique index** `(owner_id, idempotency_key)`.
 
 `outbox_events` — the transactional outbox: `event_id`, `aggregate_id` (fileId, used as the
-Kafka message key), `event_type`, `payload` jsonb, `published_at` (null until relayed).
+Kafka message key), `event_type`, `payload` jsonb, `traceparent` (trace context of the
+request that wrote the row, see "Tracing"), `published_at` (null until relayed).
 
 Roles: `api_user` (DML on both tables), `processor_user` (SELECT/UPDATE on `files` only).
 DDL is owned by the init job, not by any service — services never create tables.
@@ -163,6 +166,43 @@ Delivery semantic is **at-least-once**: if the relay crashes between `produce()`
 idempotent — the processor's `claim()` is exactly that (see DESIGN-DECISIONS.md). Debezium/CDC
 is the "industrial" version of this pattern (reading the WAL instead of polling a table).
 
+## Tracing (one action = one trace)
+
+Every service sends OpenTelemetry traces and logs over OTLP to `lgtm` (`grafana/otel-lgtm`:
+collector + Tempo for traces + Loki for logs + Prometheus + Grafana). Open Grafana →
+Explore → Tempo at http://127.0.0.1:3000. A like is one trace:
+
+```
+browser (web/js/trace.js mints traceparent, logs "[trace] … traceId=…")
+  → gateway (nginx passes the header, no span of its own)
+  → api  PUT /v1/files/:id/like → pg queries → COMMIT (outbox row stores traceparent)
+  → api  outbox publish (gap = outbox delay, attribute outbox.delay_ms) → send file-events
+  → notifier process file-events → sse.publish (open_streams; traceId in the SSE frame)
+```
+
+Upload: `POST …/complete` → outbox → `processor handle file.uploaded` (claim, S3 get,
+`scan`, `thumbnail`, S3 put, mark ready) → `file-events send` → notifier.
+
+How the context crosses each hop:
+
+| hop | carrier | who does it |
+|-----|---------|-------------|
+| browser → api | `traceparent` HTTP header (CORS must allow it) | `web/js/api.js`, http instrumentation |
+| request → relay | `outbox_events.traceparent` column | `insertOutboxEvent` / `publishRow` (by hand) |
+| relay/processor → Kafka → consumer | `traceparent` Kafka header | kafkajs / confluent-kafka instrumentation |
+| Kafka → processor handler | header extracted by hand | `main.py` (the auto span only *links*) |
+| notifier → browser | `traceId` field in the SSE frame | `StreamRegistry.publish` |
+
+Rule of thumb: automatic propagation lives in memory (async context) and stops at any
+async boundary that stores data, like a DB row or an already-open stream. There the
+context must travel *with the data*.
+
+Setup is zero-code: env in the `x-otel-env` / `x-node-otel-env` compose anchors
+(`NODE_OPTIONS` loads the ESM hook + auto-instrumentations; the processor starts via
+`opentelemetry-instrument`). Only the propagation gaps above and a few spans are code.
+Logs carry `trace_id` (pino instrumentation; `log.JsonFormatter` in the processor).
+The relay's 250 ms poll runs with tracing suppressed, so idle ticks create no traces.
+
 ## Component inventory (and its AWS mapping)
 
 | here           | in a cloud deployment                              |
@@ -176,6 +216,7 @@ is the "industrial" version of this pattern (reading the WAL instead of polling 
 | kafka          | MSK                                                 |
 | postgres       | RDS (per-service users, or separate DBs)            |
 | redis          | ElastiCache                                         |
+| lgtm           | ADOT collector → X-Ray/CloudWatch, or Grafana Cloud  |
 
 The services deliberately speak standard protocols only — the AWS SDK for S3, plain
 Kafka/Postgres/Redis clients, OIDC for auth — so the swap from local services to managed

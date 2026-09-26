@@ -60,6 +60,7 @@ make ps      # wait until everything is healthy
 make demo    # end-to-end walkthrough (demo/client.py); this is the main test
 make logs    # follow all services
 make kafka-ui  # opt-in read-only Kafka dashboard on http://127.0.0.1:8080 (profile tools)
+# Grafana (traces + logs, always on): http://127.0.0.1:3000 → Explore → Tempo / Loki
 make down    # stop, keep data
 make reset   # stop + wipe volumes (needed after editing db/init/*)
 docker compose up -d --build <service>   # rebuild one service after a code change
@@ -86,6 +87,9 @@ There is no unit test suite. `make demo` asserts every flow.
 - `gateway/nginx.conf`: TLS, host routing, per-IP rate limit, CSP for the web app.
 - `db/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need
   `make reset` (or a manual `ALTER` on a running db).
+- `lgtm` (`grafana/otel-lgtm`): OTLP backend for traces (Tempo) and logs (Loki), on `data`.
+  Tracing is zero-code, configured by the `x-otel-env` / `x-node-otel-env` compose anchors.
+  How context crosses each hop: `docs/ARCHITECTURE.md` "Tracing".
 - Kafka topics: `file-events` (3 partitions), `file-events-retry`, `file-events-dlq`.
   Auto-create is off; topics are made by `kafka-init` in `docker-compose.yml`.
 
@@ -97,6 +101,14 @@ There is no unit test suite. `make demo` asserts every flow.
   api and notifier are on both networks (the notifier serves SSE to the browser).
 - Shared compose values live in `x-` anchors at the top of `docker-compose.yml`
   (`x-web-origin`, `x-auth-env`). Reference them; don't repeat the literals.
+- Tracing: auto-propagation stops at stored data. A new event path that goes through a DB
+  row or an open stream must carry `traceparent` by hand (see the outbox column).
+  - Node services are ESM: `NODE_OPTIONS` must keep the `--experimental-loader` hook, or
+    `import pg` etc. bypass instrumentation silently.
+  - New browser request headers must be added to the api CORS `allowedHeaders`, or the
+    browser drops the request ("Failed to fetch") while the api logs nothing.
+  - Processor logging: `log.setup()` keeps OTel's `LoggingHandler`; don't `handlers.clear()`.
+  - Tempo search via `curl` to `lgtm:3200` with `start`/`end` misbehaved; search without them.
 - Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS). Keep them in sync with the code.
 - `CONTEXT.md` is the domain glossary (File, Published file, Feed, Lease…). Use its terms;
   update it when a term is settled.
