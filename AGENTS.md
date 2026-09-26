@@ -61,6 +61,8 @@ make demo    # end-to-end walkthrough (demo/client.py); this is the main test
 make logs    # follow all services
 make kafka-ui  # opt-in read-only Kafka dashboard on http://127.0.0.1:8080 (profile tools)
 # Grafana (traces + logs, always on): http://127.0.0.1:3000 → Explore → Tempo / Loki
+docker compose exec -T lgtm curl -sG localhost:3200/api/search --data-urlencode 'q={ name = "PUT /v1/files/:id/like" }'  # find traces (TraceQL)
+docker compose exec -T lgtm curl -s localhost:3200/api/traces/<traceId>   # full trace JSON; span ids are base64
 make down    # stop, keep data
 make reset   # stop + wipe volumes (needed after editing db/init/*)
 docker compose up -d --build <service>   # rebuild one service after a code change
@@ -68,6 +70,8 @@ docker compose exec postgres psql -U api_user -d mediashare
 ```
 
 There is no unit test suite. `make demo` asserts every flow.
+Ad-hoc scripts: `.venv/bin/python`, `sys.path.insert(0, "demo")`, `from client import get_token`
+(seeded users, same defaults as the demo; keeps passwords out of chat).
 
 ## Architecture
 
