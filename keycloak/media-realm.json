@@ -42,6 +42,7 @@
   ],
   "users": [
     {
+      "id": "43ded860-c891-48e3-99af-bda9d985977d",
       "username": "demo",
       "enabled": true,
       "email": "demo@localhost",
@@ -51,9 +52,10 @@
       "credentials": [
         { "type": "password", "value": "demo-pass", "temporary": false }
       ],
-      "realmRoles": ["user"]
+      "realmRoles": ["default-roles-media"]
     },
     {
+      "id": "0a5250c5-fd5f-4c57-abd3-cdb5fe20ea99",
       "username": "alice",
       "enabled": true,
       "email": "alice@localhost",
@@ -63,9 +65,10 @@
       "credentials": [
         { "type": "password", "value": "alice-pass", "temporary": false }
       ],
-      "realmRoles": ["user"]
+      "realmRoles": ["default-roles-media"]
     },
     {
+      "id": "5d584c41-f952-4767-9318-042be1e7ce40",
       "username": "admin",
       "enabled": true,
       "email": "admin@localhost",
@@ -75,7 +78,7 @@
       "credentials": [
         { "type": "password", "value": "admin-pass", "temporary": false }
       ],
-      "realmRoles": ["user", "admin"]
+      "realmRoles": ["default-roles-media", "admin"]
     }
   ]
 }
