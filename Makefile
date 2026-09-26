@@ -16,6 +16,7 @@ up: build
 	@echo ""
 	@echo "Waiting for services to become healthy: make ps"
 	@echo "Keycloak admin console: https://auth.localhost/admin (admin / KEYCLOAK_ADMIN_PASSWORD)"
+	@echo "Grafana (traces, logs): http://127.0.0.1:3000"
 
 # --profile tools: also stop opt-in tools (kafka-ui); `down` ignores inactive profiles.
 down:

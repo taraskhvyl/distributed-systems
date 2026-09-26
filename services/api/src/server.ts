@@ -1,5 +1,6 @@
 import Fastify, { FastifyError } from 'fastify'
 import cors from '@fastify/cors'
+import { FastifyOtelInstrumentation } from '@fastify/otel'
 import { Kafka, Producer } from 'kafkajs'
 import { config } from './config.js'
 import { pool } from './db.js'
@@ -26,6 +27,11 @@ async function main() {
       redact: ['req.headers.authorization'],
     },
   })
+
+  // Route-level spans (name = route, e.g. "POST /v1/files/:id/like") plus a span per hook.
+  // Registered first so it wraps every route below. The http instrumentation alone only
+  // yields spans named "POST". Uses the tracer provider the zero-code SDK registered.
+  await app.register(new FastifyOtelInstrumentation().plugin())
 
   app.get('/healthz', async () => ({ ok: true }))
 

@@ -13,6 +13,11 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        # Set by opentelemetry-instrumentation-logging (OTEL_PYTHON_LOG_CORRELATION);
+        # "0" means the line was logged outside any span.
+        trace_id = getattr(record, "otelTraceID", "0")
+        if trace_id != "0":
+            payload["trace_id"] = trace_id
         ctx = getattr(record, "ctx", None)
         if ctx:
             payload.update(ctx)
@@ -25,7 +30,9 @@ def setup() -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
-    root.handlers.clear()
+    # Replace only the plain stdout/stderr handlers. Keep OpenTelemetry's LoggingHandler
+    # (not a StreamHandler): it ships every log record to Loki.
+    root.handlers = [h for h in root.handlers if not isinstance(h, logging.StreamHandler)]
     root.addHandler(handler)
     root.setLevel(logging.INFO)
 

@@ -8,6 +8,11 @@ packages:
 # self-contained folder per service for its Docker image.
 injectWorkspacePackages: true
 
+# Dependency install scripts are denied unless listed true here (supply-chain hygiene).
+# protobufjs (via OTel's OTLP exporter) only runs a version check; the exporter works without it.
+allowBuilds:
+  protobufjs: false
+
 minimumReleaseAgeExclude:
   - '@aws-sdk/client-s3@3.1141.0'
   - '@aws-sdk/s3-request-presigner@3.1141.0'

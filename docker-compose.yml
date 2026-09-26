@@ -9,6 +9,24 @@ x-auth-env: &auth-env
   AUTH_JWKS_URL: http://keycloak:8080/realms/media/protocol/openid-connect/certs
   WEB_ORIGIN: *web-origin
 
+# OpenTelemetry, zero-code: the SDK reads everything from env. Each service adds its own
+# OTEL_SERVICE_NAME. If lgtm is down, the SDK drops spans; the app keeps working.
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+
+# Node services: the ESM loader hook must be registered before the app imports pg/kafkajs,
+# or the ESM `import` bypasses the patching (require hooks only see CommonJS `require`).
+x-node-otel-env: &node-otel-env
+  <<: *otel-env
+  NODE_OPTIONS: >-
+    --experimental-loader=@opentelemetry/instrumentation/hook.mjs
+    --import=@opentelemetry/auto-instrumentations-node/register
+  # Only what we use; the default set also traces fs/dns/net and floods every trace.
+  OTEL_NODE_ENABLED_INSTRUMENTATIONS: http,pg,ioredis,kafkajs,pino
+  # Skip cloud detectors (GCP/AWS): they probe metadata endpoints and warn on every start.
+  OTEL_NODE_RESOURCE_DETECTORS: env,host,os
+
 networks:
   edge:
     name: mediashare-edge
@@ -112,6 +130,18 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_READONLY: "true" # browse only: no producing, no deleting topics
 
+  # Tracing/logs backend: OTel collector + Tempo + Loki + Prometheus + Grafana in one image
+  # (~1 GB RAM). Always on, so a trace exists when a bug happens, not only after we start
+  # looking. Grafana (anonymous admin) is loopback-only, like kafka-ui: http://127.0.0.1:3000.
+  # No volume: recreating the container drops old telemetry, fine for a lab.
+  # Nothing depends_on it on purpose: telemetry must never block the app from starting.
+  lgtm:
+    image: grafana/otel-lgtm:0.34.0
+    networks: [data]
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
   storage:
     image: chrislusf/seaweedfs:4.47
     user: seaweed
@@ -179,13 +209,15 @@ services:
       DATABASE_URL: postgres://api_user:${API_DB_PASSWORD:?}@postgres:5432/mediashare
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379
       KAFKA_BROKERS: kafka:9092
-      <<: *auth-env
+      # One merge key per mapping in YAML, so both anchors go in one list.
+      <<: [*auth-env, *node-otel-env]
       S3_ENDPOINT_INTERNAL: http://storage:8333
       S3_ENDPOINT_PUBLIC: https://s3.localhost
       S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?}
       S3_SECRET_KEY: ${S3_API_SECRET_KEY:?}
       S3_UPLOADS_BUCKET: media-uploads
       S3_THUMBNAILS_BUCKET: media-thumbnails
+      OTEL_SERVICE_NAME: api
     depends_on:
       postgres:
         condition: service_healthy
@@ -220,6 +252,10 @@ services:
       TOPIC_MAIN: file-events
       TOPIC_RETRY: file-events-retry
       TOPIC_DLQ: file-events-dlq
+      <<: *otel-env
+      OTEL_SERVICE_NAME: processor
+      # Adds otelTraceID/otelSpanID to every LogRecord (read by log.JsonFormatter).
+      OTEL_PYTHON_LOG_CORRELATION: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -241,10 +277,11 @@ services:
     networks: [edge, data]
     environment:
       PORT: "3001"
-      <<: *auth-env
+      <<: [*auth-env, *node-otel-env]
       KAFKA_BROKERS: kafka:9092
       TOPIC_MAIN: file-events
       WEBHOOK_URL: ${WEBHOOK_URL:-}
+      OTEL_SERVICE_NAME: notifier
     depends_on:
       kafka:
         condition: service_healthy
