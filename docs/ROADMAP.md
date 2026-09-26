@@ -69,18 +69,31 @@ Follow-ups found in 1b (not scheduled):
 
 Follow one action through browser → gateway → api → outbox → Kafka → consumer → SSE as a single trace.
 
-- [ ] Add `grafana/otel-lgtm` to compose (data network only)
-- [ ] Auto-instrument api + notifier (Fastify, pg, ioredis, kafkajs); Python SDK in processor with spans around scan/thumbnail
-- [ ] Propagate `traceparent` **across the outbox**: store it in an outbox column in the same transaction, relay sets it as a Kafka header, consumers continue the trace
+Ticked on run + recorded outcome; Q&A entries skipped for this phase by choice (the "why"
+lives in ARCHITECTURE "Tracing" and SECURITY "Trace context from clients").
+
+- [x] Add `grafana/otel-lgtm` to compose (data network only); Grafana on 127.0.0.1:3000
+- [x] Auto-instrument api + notifier (http, pg, ioredis, kafkajs, pino; `@fastify/otel` since
+  the fastify instrumentation was removed); Python zero-code in processor with spans around scan/thumbnail
+  - Processor: the confluent-kafka instrumentation only *links* a consumed message to its
+    producer, so `main.py` extracts `traceparent` and continues the trace. Upload → processor
+    → notifier is now one trace.
+- [x] Propagate `traceparent` **across the outbox**: store it in an outbox column in the same transaction, relay sets it as a Kafka header, consumers continue the trace
   - Prediction (before, plain auto-instrumentation): one trace, "the Kafka instrumentation passes it along".
   - Outcome: **two traces**. Trace 1 = `PUT /v1/files/:id/like` → pg queries → `COMMIT` (the
     outbox INSERT is in it), then nothing. Trace 2 is rooted at the relay's `send file-events`
     and continues into the notifier's `process file-events`. Kafka itself propagated fine
     (kafkajs header); the break is the outbox: the relay's timer has no request context.
     Side finding: every 250 ms relay tick made 4 orphan root traces (BEGIN/SELECT/COMMIT/connect).
+  - Fix: `traceparent` column + `outbox publish` span under it → one trace; the gap before it
+    is the outbox delay (~230 ms). Poll runs under `suppressTracing`: idle ticks → 0 traces.
 - [ ] Trace a like end to end: api → outbox → Kafka → notifier → SSE to the owner's browser
+  - Server side done: trace ends in `sse.publish` (`sse.open_streams`), frame carries `traceId`.
+  - Open: confirm in a real browser that alice's console logs `[trace] received file.liked`
+    with the liker's traceId and shows the toast (the unconfirmed 1b toast). Prediction: _
 - [ ] `trace_id` in every log line (pino + `JsonFormatter`); jump trace → logs in Grafana
-- [ ] nginx passes through `traceparent`
+  - `trace_id` done in all three services. Open: verify the Tempo → Loki jump in Grafana.
+- [x] nginx passes through `traceparent`
   - Browser starts the trace (`web/js/trace.js`). Prediction (sending it without a CORS change): like fails.
   - Outcome: correct. The preflight still returns 204, but `Access-Control-Allow-Headers` lacks
     `traceparent`, so the browser drops the real request ("Failed to fetch") and the api logs
@@ -89,13 +102,25 @@ Follow one action through browser → gateway → api → outbox → Kafka → c
 
 Key idea: auto-propagation breaks at async boundaries. Context must travel *with the data*.
 
+Experiments not run yet (ask for a prediction first):
+- Stop the notifier, like, start it again: what does the trace's time gap look like? Compare
+  with consumer lag in the Kafka UI.
+- A processor failure → retry topic: does the retry continue the same trace?
+
+Follow-ups found in 2 (not scheduled):
+- Each consumed message still leaves a tiny orphan `recv` trace from the processor's
+  auto-instrumentation (it links, we parent). Filter or disable if it gets noisy.
+- The processor's claim reaper queries run outside any span (periodic orphan traces).
+- Dashboards: none yet on purpose (Explore covers single traces). First one comes with the
+  Phase 3 consumer-lag metric.
+
 ## Phase 3 — Scaling (under load)
 
 - [ ] **k6 script** replaying upload + feed + like flows; baseline on 1 replica. Where is the first bottleneck?
   - Prediction: _
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
   - Prediction: _
-- [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric.** Watch rebalances.
+- [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
   - Prediction: _
 - [ ] `--scale notifier=3`: SSE events go missing (the partition's consumer isn't the instance holding the connection). Fix with Redis pub/sub fan-out.
   - Prediction: _
