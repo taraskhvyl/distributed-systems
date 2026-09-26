@@ -1,7 +1,10 @@
 import json
 import time
 
-from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
+from confluent_kafka import Consumer, KafkaError, KafkaException, Message, Producer
+from opentelemetry import propagate, trace
+from opentelemetry.context import Context
+from opentelemetry.trace import SpanKind
 
 from config import load
 from consumer import EventProcessingError, Processor
@@ -10,6 +13,18 @@ from log import get, setup
 from s3 import Storage
 
 logger = get("main")
+tracer = trace.get_tracer("processor")
+
+
+def _producer_trace_context(msg: Message) -> Context:
+    """The trace the message was produced in, read from its `traceparent` header.
+
+    The confluent-kafka instrumentation starts a NEW trace per poll and only links to the
+    producer (a poll can return messages from many traces). We handle one message at a
+    time, so we continue the producer's trace instead: upload -> processor is one trace.
+    """
+    headers = {key: value.decode() for key, value in (msg.headers() or []) if value is not None}
+    return propagate.extract(headers)
 
 
 def main() -> None:
@@ -73,23 +88,30 @@ def main() -> None:
                 consumer.commit(message=msg, asynchronous=False)
                 continue
 
-            try:
-                result = processor.handle(envelope)
-                logger.info(
-                    "event handled",
-                    extra={"ctx": {
-                        "eventId": envelope.get("eventId"),
-                        "eventType": envelope.get("eventType"),
-                        "topic": msg.topic(),
-                        "partition": msg.partition(),
-                        "offset": msg.offset(),
-                        "result": result,
-                    }},
-                )
-            except EventProcessingError as exc:
-                processor.handle_failure(envelope, exc)
-            except Exception as exc:
-                logger.exception("unexpected handler error")
+            # Retry/DLQ messages produced inside this span carry it on, so a retry
+            # continues the same trace.
+            with tracer.start_as_current_span(
+                f"handle {envelope.get('eventType')}",
+                context=_producer_trace_context(msg),
+                kind=SpanKind.CONSUMER,
+            ):
+                try:
+                    result = processor.handle(envelope)
+                    logger.info(
+                        "event handled",
+                        extra={"ctx": {
+                            "eventId": envelope.get("eventId"),
+                            "eventType": envelope.get("eventType"),
+                            "topic": msg.topic(),
+                            "partition": msg.partition(),
+                            "offset": msg.offset(),
+                            "result": result,
+                        }},
+                    )
+                except EventProcessingError as exc:
+                    processor.handle_failure(envelope, exc)
+                except Exception:
+                    logger.exception("unexpected handler error")
 
             consumer.commit(message=msg, asynchronous=False)
     except KeyboardInterrupt:

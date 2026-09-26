@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from confluent_kafka import Producer
+from opentelemetry import trace
 
 from config import Config
 from db import FileStore
@@ -12,6 +13,7 @@ from scan import scan, sha256_hex
 from thumbnail import make_thumbnail
 
 logger = get("processor")
+tracer = trace.get_tracer("processor")
 
 
 class EventProcessingError(Exception):
@@ -51,8 +53,11 @@ class Processor:
 
         try:
             data = self._storage.get_upload(object_key)
-            verdict = scan(data)
-            checksum = sha256_hex(data)
+            # Pure CPU work: no library span covers it, so time it by hand.
+            with tracer.start_as_current_span("scan", attributes={"file.bytes": len(data)}) as span:
+                verdict = scan(data)
+                checksum = sha256_hex(data)
+                span.set_attribute("scan.verdict", verdict)
 
             if verdict == "infected":
                 self._storage.delete_upload(object_key)
@@ -69,7 +74,8 @@ class Processor:
                 return {"outcome": "rejected", "fileId": file_id}
 
             thumbnail_key = None
-            thumb = make_thumbnail(data, content_type)
+            with tracer.start_as_current_span("thumbnail", attributes={"file.content_type": content_type}):
+                thumb = make_thumbnail(data, content_type)
             if thumb is not None:
                 thumbnail_key = f"{file_id}.webp"
                 self._storage.put_thumbnail(thumbnail_key, thumb)
