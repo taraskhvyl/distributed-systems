@@ -3,7 +3,8 @@
 A small but **complete** media-sharing platform built the way production systems are:
 presigned S3 uploads, eventual consistency, the transactional outbox pattern, Kafka
 consumer groups with retry/DLQ, OAuth2/OIDC (with a browser app using hand-written PKCE),
-live updates over Server-Sent Events, layered rate limiting, and network segmentation —
+live updates over Server-Sent Events, an Envoy gateway that verifies JWTs at the edge,
+layered rate limiting (per IP, per user), and network segmentation —
 all running locally via Docker Compose.
 
 <!-- Same diagram as in docs/ARCHITECTURE.md: keep both in sync. -->
@@ -60,9 +61,9 @@ make ps        # wait until everything is "healthy"
 make demo      # runs the full end-to-end walkthrough (installs `requests` if needed)
 ```
 
-Then open **https://app.localhost** and log in as `demo` / `demo-pass`: upload a file,
-watch the progress bar, and see its status change live (`uploaded → ready`) without
-refreshing.
+Then open **https://app.localhost** and log in as `demo` / `demo-pass`: **Create** a post
+(upload with a progress bar), watch its tile in **Profile** go `uploaded → ready` live
+without refreshing, make it public, and follow people from **Search** to fill **Home**.
 
 Requirements: Docker + Docker Compose, Python 3. `make up` generates a local dev CA and a
 server certificate for `app/api/auth/s3.localhost` under `infra/gateway/certs/` (macOS resolves
@@ -77,7 +78,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 The demo client narrates every step and asserts each behavior:
 
-1. call the API without a token → 401
+1. call the API without a token → 401 (from the gateway: bad tokens never reach the api)
 2. obtain an OIDC access token from Keycloak (JWT claims shown)
 3. register file metadata → receive a **presigned S3 upload URL**
 4. replay the same `Idempotency-Key` → the original file, no duplicate
@@ -89,16 +90,22 @@ The demo client narrates every step and asserts each behavior:
 8. compare sha256 of the processed file against the local file
 9. download the original via a short-lived presigned URL; fetch the **public** thumbnail
 10. upload an "infected" file → processor detects it, purges the object, status `infected`, downloads blocked (403)
-11. burst 12 mutations → the per-user Redis token bucket returns 429s (client honors `Retry-After`)
+11. burst 12 mutations → 429s from the per-user limits (client honors `Retry-After`)
 12. RBAC: regular user's DELETE → 403; admin's DELETE → 204
 13. CORS: only `https://app.localhost` may call the api and PUT to presigned S3 URLs
 14. list files
+15. alice uploads a file: private by default, so demo gets 404 (not 403)
+16. alice makes it public → a Published file (public AND ready)
+17. demo finds alice, follows her (twice: PUT is idempotent), sees her file in the feed
+18. demo likes it twice → like count 1, and alice gets exactly ONE live notification
+19. alice makes it private again → gone from demo's feed, 404 again
 
 ## Users (seeded in the Keycloak realm)
 
 | user   | password   | realm roles   |
 |--------|------------|---------------|
 | demo   | demo-pass  | user          |
+| alice  | alice-pass | user          |
 | admin  | admin-pass | user, admin   |
 
 Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password from
@@ -108,7 +115,8 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 
 | service    | stack          | role                                                             |
 |------------|----------------|------------------------------------------------------------------|
-| gateway    | Envoy          | TLS termination, host routing, per-IP rate limit (via `ratelimit`), security headers |
+| gateway    | Envoy          | TLS termination, host routing, JWT validation for `api.localhost` (`jwt_authn`), per-IP + per-user rate limits (via `ratelimit`), security headers/CSP |
+| ratelimit  | envoyproxy/ratelimit | global rate-limit service the gateway asks per request (gRPC); counters in Redis |
 | web        | React + TS + Tailwind/shadcn (Vite), served by nginx | Instagram-style browser app: PKCE login, direct-to-S3 upload with progress, live status |
 | keycloak   | Keycloak 26    | OIDC identity provider, issues JWTs                              |
 | api        | Node 24 + TS (Fastify 5) | public REST API: auth, presigned URLs, idempotency, outbox relay |
@@ -117,13 +125,13 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 | postgres   | Postgres 18    | file metadata + outbox table, least-privilege per-service roles  |
 | kafka      | Kafka 4.3 (KRaft) | event backbone: `file-events`, `-retry`, `-dlq`              |
 | storage    | SeaweedFS 4.47 | S3-compatible object store: private + public buckets, scoped IAM identities |
-| redis      | Redis 8        | per-user token-bucket rate limiting (atomic Lua script)          |
+| redis      | Redis 8        | api's per-user write token bucket (atomic Lua script) + gateway rate-limit counters |
 
 ## API surface (all behind `https://api.localhost`)
 
 | method | path                        | auth        | notes                                    |
 |--------|-----------------------------|-------------|------------------------------------------|
-| GET    | `/healthz`, `/readyz`       | none        | liveness / readiness (checks pg + redis) |
+| GET    | `/healthz`, `/readyz`       | none inside the network; JWT via the gateway | liveness / readiness (checks pg + redis) |
 | GET    | `/v1/files`                 | bearer JWT  | own files, `limit`/`offset`              |
 | GET    | `/v1/files/:id`             | bearer JWT  | owner, admin, or anyone if Published (404 otherwise) |
 | PATCH  | `/v1/files/:id`             | bearer JWT  | owner only: `{visibility: private\|public}` |
@@ -138,7 +146,9 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 | DELETE | `/v1/files/:id`             | role `admin`| purges objects + row                     |
 | GET    | `/v1/events`                | bearer JWT  | SSE stream of your file events (served by the notifier); closed at token expiry |
 
-CORS: only the origin `https://app.localhost` is allowed (api and presigned S3 URLs).
+Every `api.localhost` request is verified twice: by the gateway (a bad token gets its 401
+there) and again by the service (ADR 0003). CORS: only the origin `https://app.localhost` is
+allowed (api and presigned S3 URLs).
 
 ## Repository layout
 
@@ -154,7 +164,7 @@ packages/
   auth/                shared JWT verification (@mediashare/auth)
 infra/                 config for third-party components
   gateway/             Envoy config + TLS certs
-  ratelimit/           global rate-limit rules (per-IP)
+  ratelimit/           global rate-limit rules (per IP, per user)
   keycloak/            realm import
   postgres/init/       schema + roles (fresh volume only)
 tools/                 dev and test tooling, never deployed
@@ -163,10 +173,12 @@ tools/                 dev and test tooling, never deployed
 docs/                  architecture, security, Q&A, ADRs, roadmap
 ```
 
-Node services are a **pnpm workspace** (`pnpm-workspace.yaml`, lockfile `pnpm-lock.yaml`), built
-by one two-stage `apps/node.Dockerfile` from the repo root: the build stage installs with
-`--frozen-lockfile` and compiles, then `pnpm deploy --prod` writes just the service's `dist/`
-and production dependencies for the runtime image. For editor types locally: `pnpm install`
+The Node services and the web app are a **pnpm workspace** (`pnpm-workspace.yaml`, lockfile
+`pnpm-lock.yaml`). The services are built by one two-stage `apps/node.Dockerfile` from the
+repo root: the build stage installs with `--frozen-lockfile` and compiles, then
+`pnpm deploy --prod` writes just the service's `dist/` and production dependencies for the
+runtime image. The web app is built by `apps/web.Dockerfile` (Vite build, then nginx serves
+`dist/`); after a UI change: `docker compose up -d --build web`. For editor types locally: `pnpm install`
 (pnpm is pinned in `package.json` → `packageManager`; `corepack enable` provides it).
 
 ## Exploring the running system
@@ -191,6 +203,8 @@ docker compose logs -f notifier | grep sse                     # SSE streams ope
 - [docs/SECURITY.md](docs/SECURITY.md) — threat model and every control, with trade-offs
 - [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) — Q&A walkthrough of every design decision, mapped to concrete code paths
 - [docs/ROADMAP.md](docs/ROADMAP.md) — learning roadmap: interactive UI → tracing → scaling → failure injection → advanced topics
+- [docs/adr/](docs/adr/) — decisions that are hard to reverse or surprising (leases, users read model, JWT at edge + services, web build step)
+- [CONTEXT.md](CONTEXT.md) — domain glossary (File, Published file, Feed, Lease…)
 
 ## Teardown
 
