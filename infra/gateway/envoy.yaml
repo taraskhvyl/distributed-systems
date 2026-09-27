@@ -142,7 +142,8 @@ static_resources:
                         - header: { key: Cache-Control, value: no-cache }
                           append_action: OVERWRITE_IF_EXISTS_OR_ADD
                         # Shared with the other hosts below: defined once here as YAML
-                        # anchors (&name), reused as aliases (*name). Envoy has no includes.
+                        # anchors (&name), reused as aliases (*name). Envoy has no includes;
+                        # splitting into xDS files was tried and rejected (ADR 0006).
                         - &nosniff
                           header: { key: X-Content-Type-Options, value: nosniff }
                           append_action: OVERWRITE_IF_EXISTS_OR_ADD
