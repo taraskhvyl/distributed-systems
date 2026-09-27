@@ -7,10 +7,9 @@ const tracer = trace.getTracer('mediashare-notifier/sse')
  * Registry pattern: the open SSE streams of each user, so an event can be routed to every
  * tab of the user it belongs to.
  *
- * Scaling limit: the registry lives in this process's memory. With more than one notifier
- * replica, Kafka may hand an event to a replica that doesn't hold the user's stream.
- * Fix (roadmap Phase 3): every replica publishes to Redis pub/sub and each one delivers
- * to the streams it holds.
+ * The registry lives in this process's memory, so it only knows this replica's streams.
+ * Events reach it through Redis fan-out (`redis/fanout.ts`), not straight from Kafka:
+ * the replica that consumes an event is often not the one holding the user's stream.
  */
 export class StreamRegistry {
   private readonly streamsByUser = new Map<string, Set<ServerResponse>>()
@@ -36,8 +35,9 @@ export class StreamRegistry {
    * Writes the event to every open stream of the user, inside an `sse.publish` span.
    * The stream was opened long before, so no request carries this trace to the browser:
    * the span (child of the Kafka consume) records the write, and `traceId` in the frame
-   * lets the browser console name the trace it received. openStreams = 0 means the event
-   * was dropped because the user had no tab connected.
+   * lets the browser console name the trace it received. Called only on replicas that
+   * hold the user's streams; an event with no `sse.publish` span under its Redis
+   * `publish` was dropped because the user had no tab connected anywhere.
    */
   publish(userId: string, eventName: string, data: Record<string, unknown>): void {
     tracer.startActiveSpan('sse.publish', (span) => {

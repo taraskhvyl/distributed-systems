@@ -75,10 +75,13 @@ What limits the exposure:
   checked once at connect would authorize the stream forever: a disabled user would keep
   receiving events. Revocation latency is bounded by the token TTL (300 s).
 
-What it costs: an internet-facing process now holds Kafka consumer credentials on the
-`data` network. A bug in its HTTP handling is a path from the edge to Kafka. The hardened
-design splits it: a thin **SSE gateway** on `edge` with no Kafka access, fed by the
-notifier through Redis pub/sub (the same fan-out Phase 3 needs for multiple replicas).
+What it costs: an internet-facing process now holds Kafka consumer credentials and the
+Redis password (for the SSE fan-out) on the `data` network. A bug in its HTTP handling is
+a path from the edge to Kafka, and to the Redis that also stores the rate-limit counters
+(a single shared password, no Redis ACLs). The hardened design splits it: a thin **SSE
+gateway** on `edge` with no Kafka access and a Redis user limited to `SUBSCRIBE` on the
+fan-out channel, fed by the notifier through the pub/sub that now exists
+(`apps/notifier/src/redis/fanout.ts`).
 TLS terminates at the gateway; internal traffic is plaintext inside the trusted network
 (a standard trade-off — the upgrade path is mTLS via a service mesh).
 

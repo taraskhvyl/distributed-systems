@@ -318,9 +318,19 @@ Follow-ups:
   `proxy_buffering off`) and must not time the stream out (route `timeout: 0s`,
   `idle_timeout: 3600s` in `envoy.yaml`); the server writes a `: ping` comment every 25 s so idle
   intermediaries keep the connection and dead peers are detected.
-- *"Does it scale?"* Not yet: the registry is in one process's memory. With 3 replicas,
-  Kafka hands an event to whichever replica owns the partition, which may not hold the
-  user's stream. Fix: Redis pub/sub fan-out (roadmap Phase 3).
+- *"Does it scale?"* The registry is in one process's memory, and two unrelated routers
+  decide placement: Kafka gives the event to the partition's owner, Envoy spread the
+  browser's connections round-robin. Measured with 3 replicas, 3 tabs, 20 likes: **20 / 0 /
+  0** — all likes are on one file → one partition → one replica, which held one tab.
+  Fix: the consuming replica `PUBLISH`es to a Redis channel, every replica is subscribed
+  and delivers to the streams it holds → 20 / 20 / 20, one continuous trace (the trace
+  context rides inside the pub/sub message; auto-propagation stops there). Trade-offs:
+  pub/sub is fire-and-forget (a replica cut off from Redis misses events: fine, SSE was
+  already at-most-once); one channel means every replica sees every event (per-user
+  channels when that costs too much); Redis is now on the push path (down → no live
+  events, the webhook handler keeps working because publish failures are dropped, not
+  thrown). Alternative: sticky routing by user to the partition owner, which breaks on
+  every rebalance.
 - *"Production hardening?"* A BFF with an `HttpOnly` session cookie makes plain
   `EventSource` work, and a separate SSE gateway without Kafka credentials shrinks the
   internet-facing surface (see SECURITY.md, "Notifier edge exposure").
@@ -508,7 +518,8 @@ Known limitations, tracked deliberately:
 3. **Keyset pagination** — the feed uses it; `GET /v1/files` still uses OFFSET.
 4. **Outbox → CDC** — polling works; Debezium is the grown-up version.
 5. **Push delivery guarantees**: SSE push exists (`/v1/events`), but events missed while
-   disconnected aren't replayed (resync only) and the stream registry is single-replica.
+   disconnected aren't replayed (resync only); cross-replica fan-out is Redis pub/sub,
+   also at-most-once.
 6. **Multipart presigned uploads** for big files; per-user storage quotas (rate ≠ quota).
 7. **Multi-region** — presigned URLs are region-agnostic but the metadata DB and Kafka
    are the hard part: that's a whole separate design discussion (CQRS + event replication +

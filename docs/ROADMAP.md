@@ -257,8 +257,16 @@ Follow-ups found in 2 (not scheduled):
     processor-4 took partition 2, and the lag was 0 five seconds later. 561 files `ready`,
     none stuck. The idle member is a hot standby: it cuts failover to the detection time,
     and that time is the session timeout.
-- [ ] `--scale notifier=3`: SSE events go missing (the partition's consumer isn't the instance holding the connection). Fix with Redis pub/sub fan-out.
-  - Prediction: _
+- [x] `--scale notifier=3`: SSE events go missing (the partition's consumer isn't the instance holding the connection). Fix with Redis pub/sub fan-out.
+  - Prediction: skipped.
+  - `tools/demo/sse_fanout.py`: the owner opens 3 SSE tabs, 20 users like one file.
+    1 notifier: 20 / 20 / 20. 3 notifiers: **20 / 0 / 0** — confirmed. Envoy spread the
+    tabs one per replica; every like is on one file → one partition → one consumer, and it
+    held one tab. Lost silently: no error anywhere, `sse.publish` just had 1 open stream.
+  - Fix (`apps/notifier/src/redis/fanout.ts`): the consumer `PUBLISH`es, every replica
+    subscribes and delivers to its own streams → 20 / 20 / 20; `make demo` passes with 3
+    replicas. The trace stays one piece: the context is carried inside the pub/sub message
+    (`publish` → `sse.publish` on two replicas, 1 + 2 streams).
 - [ ] **Feed at scale**: seed thousands of follows; fan-out-on-read p99 blows up → fan-out on write (`feed-writer` consumer, Redis sorted set per user) → one user with 50k followers spikes lag → hybrid
   - Prediction: _
 - [ ] **Hot key**: hammer likes on one viral file; row-lock contention caps throughput regardless of replicas → sharded counters → Redis `INCR` + periodic flush (exact vs approximate)

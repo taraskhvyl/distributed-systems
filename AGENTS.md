@@ -116,12 +116,14 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   expired-claim reaper (`src/pipeline/handler.py`, `src/adapters/db.py`); poll/commit
   loop in `src/kafka_loop.py`.
 - `apps/notifier`: Node consumer (separate consumer group) + SSE endpoint
-  `GET /v1/events` for the browser (`src/sse/events-server.ts`, `src/sse/stream-registry.ts`).
+  `GET /v1/events` for the browser (`src/sse/events-server.ts`, `src/sse/stream-registry.ts`);
+  replicas fan events out to each other over Redis pub/sub (`src/redis/fanout.ts`).
 - `packages/auth`: shared JWT verification (`@mediashare/auth`), used by api and notifier.
   Node services are a pnpm workspace (`pnpm-workspace.yaml`; shared package referenced as
   `workspace:*`) built by one two-stage `apps/node.Dockerfile` from the repo root
   (build context `.`; `.dockerignore` keeps `.env` and certs out). Adding a dependency:
-  `pnpm --filter <service> add <pkg>`, then commit `pnpm-lock.yaml` (the image build uses
+  `pnpm --filter mediashare-<service> add <pkg>` (the package name; a bare `notifier` matches
+  nothing and pnpm still prints "Done"), then commit `pnpm-lock.yaml` (the image build uses
   `--frozen-lockfile` and fails on a stale lockfile).
 - `apps/web/`: browser app (`app.localhost`), React + TS + Tailwind + shadcn, built by Vite
   (`apps/web.Dockerfile`: build stage, then nginx serves `dist/`). ADR 0004.
