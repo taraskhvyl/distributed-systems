@@ -26,8 +26,12 @@ habit conflicts with these rules, these rules win.
   - Logic used in two places gets extracted and named, not copy-pasted.
   - Repeated values (origins, issuer URLs, topic names) are defined once
     (a config module, a compose `x-` anchor, env) and referenced.
-  - If duplication across services is deliberate (shared libs couple deploys), say so in
-    a comment at both sites.
+  - A contract between services (message shape, channel/topic name, token format) lives
+    in one `packages/*` package, so a breaking change fails the build of every side.
+    It doesn't couple deploys: each image bakes in its own copy at build time. The cost
+    is rebuilding every user of the package when it changes.
+  - Copy across services only logic that is allowed to drift apart (each side may change
+    it alone), and say so in a comment at both sites.
 - **Single responsibility.** One module = one job. Keep transport (HTTP/SSE routing),
   auth, domain logic, messaging, and UI rendering in separate modules/functions.
 - **Patterns where the problem has that shape.** Use a known pattern and name it in a
