@@ -111,15 +111,24 @@ lives in ARCHITECTURE "Tracing" and SECURITY "Trace context from clients").
 
 Key idea: auto-propagation breaks at async boundaries. Context must travel *with the data*.
 
-Experiments not run yet (ask for a prediction first):
-- Stop the notifier, like, start it again: what does the trace's time gap look like? Compare
-  with consumer lag in the Kafka UI.
-- A processor failure → retry topic: does the retry continue the same trace?
+Experiments:
+- [x] Stop the notifier ~30 s, like, start it again.
+  - Prediction: _one trace; alice gets the toast after the restart._ **1 correct, 2 wrong.**
+  - Outcome: one trace with a 36.5 s gap between `send file-events` and `process file-events`
+    (the notifier's consumer lag); the processor (own group) handled it at +0.2 s. The
+    notifier resumed from its committed offset and pushed the event 60 ms after start, but
+    `sse.publish` had `open_streams = 0`: alice's reconnect backoff (1→30 s, jittered,
+    `web/js/live-events.js`) brought her back 26 s later. No toast; the like count was right
+    (resync on reconnect). Kafka → notifier is at-least-once, notifier → browser at-most-once.
+    Fix if needed: a durable notifications inbox fetched on reconnect (+ `Last-Event-ID`).
+- [ ] A processor failure → retry topic: does the retry continue the same trace?
 
 Follow-ups found in 2 (not scheduled):
 - Each consumed message still leaves a tiny orphan `recv` trace from the processor's
   auto-instrumentation (it links, we parent). Filter or disable if it gets noisy.
 - The processor's claim reaper queries run outside any span (periodic orphan traces).
+- Processor: an *unexpected* exception is logged and its offset still committed
+  (`main.py`, `except Exception`), so that class of errors is at-most-once. Phase 4 poison pill.
 - Dashboards: none yet on purpose (Explore covers single traces). First one comes with the
   Phase 3 consumer-lag metric.
 
