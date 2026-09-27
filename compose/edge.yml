@@ -24,7 +24,7 @@ services:
     depends_on:
       api:
         condition: service_started
-      notifier:
+      sse-gateway:
         condition: service_started
       web:
         condition: service_started

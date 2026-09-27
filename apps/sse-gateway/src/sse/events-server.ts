@@ -29,7 +29,7 @@ export function startEventsServer(options: EventsServerOptions): http.Server {
   const corsHeaders = { 'Access-Control-Allow-Origin': webOrigin }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const { pathname } = new URL(req.url ?? '/', 'http://notifier')
+    const { pathname } = new URL(req.url ?? '/', 'http://sse-gateway')
     if (pathname === HEALTH_PATH) {
       res.end('ok')
       return

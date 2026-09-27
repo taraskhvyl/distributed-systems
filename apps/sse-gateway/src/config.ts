@@ -5,9 +5,9 @@ function required(name: string): string {
 }
 
 export const config = {
+  port: Number(process.env.PORT ?? 3001),
+  authIssuer: required('AUTH_ISSUER'),
+  authJwksUrl: required('AUTH_JWKS_URL'),
+  webOrigin: required('WEB_ORIGIN'),
   redisUrl: required('REDIS_URL'),
-  kafkaBrokers: (process.env.KAFKA_BROKERS ?? 'kafka:9092').split(','),
-  topicMain: process.env.TOPIC_MAIN ?? 'file-events',
-  groupId: 'notifier',
-  webhookUrl: process.env.WEBHOOK_URL || null,
 }

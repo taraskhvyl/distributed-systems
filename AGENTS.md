@@ -115,10 +115,12 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
 - `apps/processor`: Python 3.14 Kafka consumer. Scan + thumbnail, CAS claim, retry/DLQ,
   expired-claim reaper (`src/pipeline/handler.py`, `src/adapters/db.py`); poll/commit
   loop in `src/kafka_loop.py`.
-- `apps/notifier`: Node consumer (separate consumer group) + SSE endpoint
-  `GET /v1/events` for the browser (`src/sse/events-server.ts`, `src/sse/stream-registry.ts`);
-  replicas fan events out to each other over Redis pub/sub (`src/redis/fanout.ts`).
-- `packages/auth`: shared JWT verification (`@mediashare/auth`), used by api and notifier.
+- `apps/notifier`: Node Kafka consumer (separate consumer group): webhooks, and live events
+  `PUBLISH`ed to Redis `sse-events` (`src/redis/publisher.ts`). `data` network only, no HTTP.
+- `apps/sse-gateway`: SSE endpoint `GET /v1/events` for the browser (`src/sse/events-server.ts`,
+  `src/sse/stream-registry.ts`), fed by `SUBSCRIBE sse-events` (`src/redis/subscriber.ts`).
+  Networks `edge` + `sse` (redis, lgtm): no Kafka, no Postgres. ADR 0005.
+- `packages/auth`: shared JWT verification (`@mediashare/auth`), used by api and sse-gateway.
   Node services are a pnpm workspace (`pnpm-workspace.yaml`; shared package referenced as
   `workspace:*`) built by one two-stage `apps/node.Dockerfile` from the repo root
   (build context `.`; `.dockerignore` keeps `.env` and certs out). Adding a dependency:
@@ -152,7 +154,10 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   `docker compose run --rm --no-deps gateway --mode validate -c /etc/envoy/envoy.yaml`.
 - curl resolves every `*.localhost` to loopback itself (RFC 6761), ignoring Docker DNS.
   Inside the `loadtest` network use `curl --resolve host:443:<gateway ip>`.
-  api and notifier are on both networks (the notifier serves SSE to the browser).
+  api is on both networks; sse-gateway is on `edge` + `sse` (only redis and lgtm there).
+- Redis has ACL users (`compose/data.yml`): `notifier` may only PUBLISH and `sse-gateway` only
+  SUBSCRIBE on `sse-events`. ioredis's ready check runs INFO, so those clients set
+  `enableReadyCheck: false`. A new command or channel for them needs an ACL change + `redis` recreate.
 - Compose is split by tier: `docker-compose.yml` is the map (networks, volumes, `include:`),
   services live in `compose/{data,edge,apps,observability,tools}.yml`. Each include has
   `project_directory: .`, so every path (`./infra/...`, `env_file`) is relative to the repo root.

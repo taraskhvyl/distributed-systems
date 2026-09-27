@@ -1,5 +1,5 @@
 {
-  "name": "mediashare-notifier",
+  "name": "mediashare-sse-gateway",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -14,11 +14,11 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@mediashare/auth": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/auto-instrumentations-node": "^0.80.0",
     "@opentelemetry/instrumentation": "^0.222.0",
     "ioredis": "^5.11.1",
-    "kafkajs": "^2.2.4",
     "pino": "^10.3.1"
   },
   "devDependencies": {

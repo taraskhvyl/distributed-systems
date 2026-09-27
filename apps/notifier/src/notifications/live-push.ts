@@ -1,11 +1,11 @@
 import type { EnvelopeHandler } from '../events.js'
-import { describeEvent } from '../notifications/messages.js'
-import type { PublishSse } from '../redis/fanout.js'
+import type { PublishSse } from '../redis/publisher.js'
+import { describeEvent } from './messages.js'
 
 /**
- * Handler: push an event to every open stream of the file's owner, on whichever replica
- * holds them (`publish` fans out over Redis). At-most-once: if the owner has no tab
- * connected right now, the event is gone (the client resyncs on reconnect).
+ * Handler: send the event to the file owner's open browser tabs (via the SSE gateway).
+ * At-most-once: if the owner has no tab connected right now, the event is gone (the
+ * client resyncs on reconnect).
  */
 export function pushToOwnerStreams(publish: PublishSse): EnvelopeHandler {
   return async (envelope) => {

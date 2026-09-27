@@ -15,6 +15,10 @@ networks:
     name: mediashare-edge
   data:
     name: mediashare-data
+  # The SSE gateway's back side: only redis (live events) and lgtm (telemetry). The
+  # gateway faces the internet, so it must not share a network with kafka or postgres.
+  sse:
+    name: mediashare-sse
   # Only k6 and the gateway. The fixed subnet is what the rate-limit rules exempt from
   # per-IP limits (infra/ratelimit/config.yaml), so it must match there.
   loadtest:

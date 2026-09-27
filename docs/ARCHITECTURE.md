@@ -14,12 +14,12 @@ flowchart LR
     web["web app (apps/web/, React, built by Vite)"]
     keycloak["keycloak (OIDC, JWT)"]
     api["api (Node + TS)"]
-    notifier["notifier (Node, SSE)"]
+    sse["sse-gateway (Node, SSE)<br/>+ network sse: redis, lgtm only"]
     storage["storage (SeaweedFS S3)"]
     gateway -- "app.localhost" --> web
     gateway -- "auth.localhost" --> keycloak
     gateway -- "api.localhost" --> api
-    gateway -- "api.localhost/v1/events" --> notifier
+    gateway -- "api.localhost/v1/events" --> sse
     gateway -- "s3.localhost" --> storage
   end
 
@@ -28,6 +28,7 @@ flowchart LR
     redis[(redis)]
     kafka{{kafka}}
     processor["processor (Python)"]
+    notifier["notifier (Node)"]
     lgtm["lgtm: traces + logs<br/>Grafana 127.0.0.1:3000"]
   end
 
@@ -36,34 +37,42 @@ flowchart LR
   api -- "outbox relay" --> kafka
   kafka --> processor
   kafka --> notifier
-  notifier -- "SSE fan-out (pub/sub)" --> redis
+  notifier -- "PUBLISH sse-events" --> redis
+  redis -- "SUBSCRIBE (network sse)" --> sse
   processor --> postgres
   processor --> storage
   api --> storage
   api -. OTLP .-> lgtm
   notifier -. OTLP .-> lgtm
+  sse -. OTLP .-> lgtm
   processor -. OTLP .-> lgtm
 ```
 
 Network rules (enforced by Docker, mirroring VPC subnets + security groups):
 
-| container  | edge | data | can be reached by              | can reach                       |
-|------------|------|------|--------------------------------|---------------------------------|
-| gateway    | ✔    | ✖    | internet (host :443 only)      | api, notifier, keycloak, storage |
-| keycloak   | ✔    | ✖    | gateway (proxy + JWKS), api, notifier (JWKS) | (nothing it needs)              |
-| api        | ✔    | ✔    | gateway (public), internal     | keycloak, postgres, redis, kafka, storage |
-| storage    | ✔    | ✔    | gateway (S3 endpoint), internal| (nothing it needs)              |
-| postgres   | ✖    | ✔    | api, processor                 | —                               |
-| kafka      | ✖    | ✔    | api, processor, notifier       | —                               |
-| redis      | ✖    | ✔    | api, notifier                  | —                               |
-| processor  | ✖    | ✔    | internal only                  | postgres, kafka, storage        |
-| notifier   | ✔    | ✔    | gateway (`/v1/events` only)    | kafka, redis, keycloak, webhook egress |
-| lgtm       | ✖    | ✔    | api, processor, notifier (OTLP); host loopback :3000 | — |
+A third network, **sse**, holds only `sse-gateway`, `redis` and `lgtm`: the gateway's
+back side, so the one other internet-facing service never shares a network with Kafka or
+Postgres.
+
+| container   | edge | data | sse | can be reached by              | can reach                       |
+|-------------|------|------|-----|--------------------------------|---------------------------------|
+| gateway     | ✔    | ✖    | ✖   | internet (host :443 only)      | api, sse-gateway, keycloak, storage |
+| keycloak    | ✔    | ✖    | ✖   | gateway (proxy + JWKS), api, sse-gateway (JWKS) | (nothing it needs)              |
+| api         | ✔    | ✔    | ✖   | gateway (public), internal     | keycloak, postgres, redis, kafka, storage |
+| storage     | ✔    | ✔    | ✖   | gateway (S3 endpoint), internal| (nothing it needs)              |
+| postgres    | ✖    | ✔    | ✖   | api, processor                 | —                               |
+| kafka       | ✖    | ✔    | ✖   | api, processor, notifier       | —                               |
+| redis       | ✖    | ✔    | ✔   | api, notifier, sse-gateway (ACL: SUBSCRIBE only) | —             |
+| processor   | ✖    | ✔    | ✖   | internal only                  | postgres, kafka, storage        |
+| notifier    | ✖    | ✔    | ✖   | internal only                  | kafka, redis (ACL: PUBLISH only), webhook egress |
+| sse-gateway | ✔    | ✖    | ✔   | gateway (`/v1/events` only)    | redis, keycloak, lgtm           |
+| lgtm        | ✖    | ✔    | ✔   | api, processor, notifier, sse-gateway (OTLP); host loopback :3000 | — |
 
 The gateway is *physically incapable* of reaching the database, Kafka, or Redis. Even if
 Envoy were fully compromised, data stores are unreachable from it. The processor is not on
-the edge network at all. The notifier is, because it serves the browser's SSE stream: see
-"Notifier edge exposure" in [SECURITY.md](SECURITY.md).
+the edge network at all, and neither is the notifier. The browser's SSE stream is served by
+`sse-gateway`, which can reach Redis but not Kafka or Postgres: see "SSE gateway edge
+exposure" in [SECURITY.md](SECURITY.md) and ADR 0005.
 
 ## The upload flow (the full sequence)
 
@@ -128,11 +137,12 @@ stateDiagram-v2
 ```
 
 Clients can poll `GET /v1/files/:id` (the demo does), or subscribe to push: the browser
-keeps an SSE stream to `GET /v1/events` (notifier), which forwards every event whose
-`ownerId` matches the token's user (`apps/notifier/src/sse/events-server.ts`).
-With several notifier replicas the one that consumes an event is usually not the one
-holding the user's stream, so it publishes to a Redis channel and every replica delivers
-to its own streams (`apps/notifier/src/redis/fanout.ts`).
+keeps an SSE stream to `GET /v1/events` (`sse-gateway`,
+`apps/sse-gateway/src/sse/events-server.ts`). The notifier consumes `file-events` and
+publishes each event for its owner to the Redis channel `sse-events`
+(`apps/notifier/src/redis/publisher.ts`); every `sse-gateway` replica subscribes and writes
+it to the streams it holds for that user (`apps/sse-gateway/src/redis/subscriber.ts`), so
+it doesn't matter which replica a tab landed on.
 
 ## Data model (postgres)
 
@@ -211,7 +221,7 @@ flowchart TD
   O --> K["api: send file-events"]
   K -- "traceparent Kafka header" --> N["notifier: process file-events"]
   N --> P["notifier: publish (Redis)"]
-  P -- "traceContext in the pub/sub message" --> S["notifier (any replica): sse.publish<br/>sse.open_streams"]
+  P -- "traceContext in the pub/sub message" --> S["sse-gateway (any replica): sse.publish<br/>sse.open_streams"]
   S -- "traceId in SSE frame" --> BO["owner's browser<br/>console: [trace] received"]
 ```
 
@@ -226,7 +236,7 @@ How the context crosses each hop:
 | request → relay | `outbox_events.traceparent` column | `insertOutboxEvent` / `publishRow` (by hand) |
 | relay/processor → Kafka → consumer | `traceparent` Kafka header | kafkajs / confluent-kafka instrumentation |
 | Kafka → processor handler | header extracted by hand | `apps/processor/src/kafka_loop.py` (the auto span only *links*) |
-| notifier → notifier replicas | `traceContext` field in the Redis pub/sub message | `apps/notifier/src/redis/fanout.ts` (by hand) |
+| notifier → sse-gateway | `traceContext` field in the Redis pub/sub message | `redis/publisher.ts` / `redis/subscriber.ts` (by hand) |
 | notifier → browser | `traceId` field in the SSE frame | `StreamRegistry.publish` |
 
 Rule of thumb: automatic propagation lives in memory (async context) and stops at any
@@ -248,6 +258,7 @@ The relay's 250 ms poll runs with tracing suppressed, so idle ticks create no tr
 | api            | ECS Fargate / EKS pods, autoscaled                  |
 | processor      | ECS/K8s workers, one per partition (max 3)          |
 | notifier       | ECS/K8s + SQS/SNS or webhook fan-out service        |
+| sse-gateway    | ECS/K8s behind the ALB; ElastiCache pub/sub with an ACL user (or API Gateway WebSockets / AppSync) |
 | storage        | S3 (presigned URLs work identically)                |
 | kafka          | MSK                                                 |
 | postgres       | RDS (per-service users, or separate DBs)            |

@@ -267,6 +267,13 @@ Follow-ups found in 2 (not scheduled):
     subscribes and delivers to its own streams → 20 / 20 / 20; `make demo` passes with 3
     replicas. The trace stays one piece: the context is carried inside the pub/sub message
     (`publish` → `sse.publish` on two replicas, 1 + 2 streams).
+  - Follow-up, security: the internet-facing notifier held unauthenticated Kafka access and
+    the full Redis password. Split (ADR 0005): notifier = Kafka consumer on `data` only;
+    `apps/sse-gateway` serves `/v1/events` on `edge` + a network with only redis and lgtm;
+    Redis ACL users (notifier: PUBLISH only, sse-gateway: SUBSCRIBE only). Checked from
+    inside sse-gateway: kafka/postgres `ENOTFOUND`, `FLUSHALL`/`GET`/`PUBLISH` → `NOPERM`;
+    `make demo` passes; 3 sse-gateway replicas → 20 / 20 / 20; one trace api → notifier →
+    Redis → sse-gateway. (The fan-out now lives in `redis/publisher.ts` / `redis/subscriber.ts`.)
 - [ ] **Feed at scale**: seed thousands of follows; fan-out-on-read p99 blows up → fan-out on write (`feed-writer` consumer, Redis sorted set per user) → one user with 50k followers spikes lag → hybrid
   - Prediction: _
 - [ ] **Hot key**: hammer likes on one viral file; row-lock contention caps throughput regardless of replicas → sharded counters → Redis `INCR` + periodic flush (exact vs approximate)

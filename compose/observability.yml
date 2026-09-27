@@ -8,7 +8,8 @@ services:
   # Nothing depends_on it on purpose: telemetry must never block the app from starting.
   lgtm:
     image: grafana/otel-lgtm:0.34.0
-    networks: [data]
+    # sse: so the sse-gateway can export OTLP without joining `data`.
+    networks: [data, sse]
     ports:
       - "127.0.0.1:3000:3000"
     environment:

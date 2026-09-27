@@ -14,7 +14,7 @@ Each entry names the threat, the control, and the accepted trade-off.
 | Denial of service               | three rate-limit layers (gateway per-IP and per-user via `ratelimit`, api per-user write bucket; all in Redis) |
 | Elevation of privilege          | realm roles (`user`/`admin`) checked server-side; per-service DB roles and scoped S3 identities |
 | Token theft via XSS (browser)   | tokens only in JS memory (never `localStorage`); CSP on `app.localhost`: scripts only from our origin (inline styles allowed for Radix/sonner, ADR 0004); React escapes all user text |
-| Lateral movement                | network segmentation: gateway cannot reach data stores; processor unreachable from the edge; notifier exposes only `/v1/events` |
+| Lateral movement                | network segmentation: gateway cannot reach data stores; processor unreachable from the edge; sse-gateway exposes only `/v1/events` and reaches only Redis (SUBSCRIBE-only ACL user) |
 
 ## Identity and access
 
@@ -48,8 +48,9 @@ round-trip per request — validation is signature + claims, in-process.
 
 Two Docker networks stand in for VPC subnets + security groups:
 
-- **edge** = public subnet. Hosts the gateway, keycloak, api, notifier, and storage's S3 endpoint.
-- **data** = private subnet. Postgres, Kafka, Redis, storage, and the workers.
+- **edge** = public subnet. Hosts the gateway, keycloak, api, sse-gateway, and storage's S3 endpoint.
+- **data** = private subnet. Postgres, Kafka, Redis, storage, and the workers (processor, notifier).
+- **sse** = the SSE gateway's back side: only `sse-gateway`, `redis`, `lgtm`.
 
 Only the gateway publishes a host port (443), plus the opt-in Kafka UI (`make kafka-ui`,
 profile `tools`) on **127.0.0.1:8080 only**: a Kafka admin UI can read every message, so it
@@ -60,14 +61,26 @@ loopback. Even so, the gateway's network membership
 limits its *east-west* blast radius: it has no route to Postgres/Kafka/Redis. The processor
 lives only on `data`, so the internet cannot address it at all.
 
-### Notifier edge exposure
+### SSE gateway edge exposure
 
-Since Phase 1a the notifier is on **both** networks: the gateway routes
-`api.localhost/v1/events` (SSE) to it, and it fetches Keycloak's JWKS over `edge`.
+The browser's live-event stream (`api.localhost/v1/events`, SSE) needs an internet-facing
+process. Until the Phase 3 split that was the notifier itself, on **both** networks, holding
+Kafka access and the full Redis password: a bug in its HTTP handling was a path from the
+edge to Kafka (which has no auth at all: `PLAINTEXT`) and to every Redis key, rate-limit
+counters included. Now the jobs are split (ADR 0005):
 
-What limits the exposure:
+- **notifier**: Kafka consumer on `data` only, no HTTP server. Hands live events to the
+  gateway by `PUBLISH`ing to the Redis channel `sse-events`.
+- **sse-gateway**: on `edge` + `sse`. `sse` holds only redis and lgtm, so Kafka and
+  Postgres don't even resolve from it (checked: `ENOTFOUND`).
+- **Redis ACL** (`compose/data.yml`): user `sse-gateway` may run exactly
+  `SUBSCRIBE sse-events`; user `notifier` exactly `PUBLISH sse-events`. Everything else,
+  including `FLUSHALL`, reading keys and publishing fake events from the gateway, is
+  `NOPERM` (checked from inside the container).
+
+What limits the exposure of `sse-gateway` itself:
 - No host port. Only the gateway reaches it, and Envoy routes exactly one path
-  (`match: { path: /v1/events }`); everything else on the notifier is unreachable from outside.
+  (`match: { path: /v1/events }`); everything else on it is unreachable from outside.
 - Per-IP rate limit (`edge` zone) on connects, so reconnect storms are bounded.
 - A valid Keycloak JWT is required (`@mediashare/auth`), and a user only receives events
   whose `ownerId` equals their `sub`.
@@ -75,13 +88,11 @@ What limits the exposure:
   checked once at connect would authorize the stream forever: a disabled user would keep
   receiving events. Revocation latency is bounded by the token TTL (300 s).
 
-What it costs: an internet-facing process now holds Kafka consumer credentials and the
-Redis password (for the SSE fan-out) on the `data` network. A bug in its HTTP handling is
-a path from the edge to Kafka, and to the Redis that also stores the rate-limit counters
-(a single shared password, no Redis ACLs). The hardened design splits it: a thin **SSE
-gateway** on `edge` with no Kafka access and a Redis user limited to `SUBSCRIBE` on the
-fan-out channel, fed by the notifier through the pub/sub that now exists
-(`apps/notifier/src/redis/fanout.ts`).
+What a compromised `sse-gateway` still gets: every user's live events (it subscribes to
+the one channel all of them go through: who liked what, file names), and a route to lgtm
+(anonymous-admin Grafana, all logs). Next steps if that matters: a channel per user, and
+an OTLP-only collector in front of lgtm. `storage` is reachable over `edge` too, as for
+everything there, but it needs S3 keys the gateway doesn't hold.
 TLS terminates at the gateway; internal traffic is plaintext inside the trusted network
 (a standard trade-off — the upgrade path is mTLS via a service mesh).
 

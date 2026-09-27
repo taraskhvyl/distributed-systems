@@ -17,12 +17,12 @@ flowchart LR
     web["web app (apps/web/, React, built by Vite)"]
     keycloak["keycloak (OIDC, JWT)"]
     api["api (Node + TS)"]
-    notifier["notifier (Node, SSE)"]
+    sse["sse-gateway (Node, SSE)<br/>+ network sse: redis, lgtm only"]
     storage["storage (SeaweedFS S3)"]
     gateway -- "app.localhost" --> web
     gateway -- "auth.localhost" --> keycloak
     gateway -- "api.localhost" --> api
-    gateway -- "api.localhost/v1/events" --> notifier
+    gateway -- "api.localhost/v1/events" --> sse
     gateway -- "s3.localhost" --> storage
   end
 
@@ -31,6 +31,7 @@ flowchart LR
     redis[(redis)]
     kafka{{kafka}}
     processor["processor (Python)"]
+    notifier["notifier (Node)"]
     lgtm["lgtm: traces + logs<br/>Grafana 127.0.0.1:3000"]
   end
 
@@ -39,18 +40,22 @@ flowchart LR
   api -- "outbox relay" --> kafka
   kafka --> processor
   kafka --> notifier
+  notifier -- "PUBLISH sse-events" --> redis
+  redis -- "SUBSCRIBE (network sse)" --> sse
   processor --> postgres
   processor --> storage
   api --> storage
   api -. OTLP .-> lgtm
   notifier -. OTLP .-> lgtm
+  sse -. OTLP .-> lgtm
   processor -. OTLP .-> lgtm
 ```
 
-api, notifier and storage are drawn on the edge network but also join the data network.
+api and storage are drawn on the edge network but also join the data network. sse-gateway
+joins only a third network, `sse`, with redis and lgtm: it can't reach Kafka or Postgres.
 
 **Nothing but the gateway's port 443 is exposed to your host.** The gateway cannot even
-reach the database, Kafka, or Redis — it only talks to `api`, `notifier` (one path),
+reach the database, Kafka, or Redis — it only talks to `api`, `sse-gateway` (one path),
 `keycloak`, and `storage`.
 
 ## Quickstart
@@ -121,7 +126,8 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 | keycloak   | Keycloak 26    | OIDC identity provider, issues JWTs                              |
 | api        | Node 24 + TS (Fastify 5) | public REST API: auth, presigned URLs, idempotency, outbox relay |
 | processor  | Python 3.14    | Kafka consumer: malware scan, thumbnails, retry/DLQ, idempotent CAS claim |
-| notifier   | Node 24 + TS   | second Kafka consumer group: webhooks + SSE stream `/v1/events` to the browser |
+| notifier   | Node 24 + TS   | second Kafka consumer group: webhooks + live events published to Redis |
+| sse-gateway | Node 24 + TS  | SSE stream `/v1/events` to the browser, fed by Redis pub/sub (no Kafka access) |
 | postgres   | Postgres 18    | file metadata + outbox table, least-privilege per-service roles  |
 | kafka      | Kafka 4.3 (KRaft) | event backbone: `file-events`, `-retry`, `-dlq`              |
 | storage    | SeaweedFS 4.47 | S3-compatible object store: private + public buckets, scoped IAM identities |
@@ -144,7 +150,7 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 | GET    | `/v1/users/:username`       | bearer JWT  | profile: follower/following counts       |
 | PUT/DELETE | `/v1/users/:username/follow` | bearer JWT | follow / unfollow (idempotent)       |
 | DELETE | `/v1/files/:id`             | role `admin`| purges objects + row                     |
-| GET    | `/v1/events`                | bearer JWT  | SSE stream of your file events (served by the notifier); closed at token expiry |
+| GET    | `/v1/events`                | bearer JWT  | SSE stream of your file events (served by sse-gateway); closed at token expiry |
 
 Every `api.localhost` request is verified twice: by the gateway (a bad token gets its 401
 there) and again by the service (ADR 0003). CORS: only the origin `https://app.localhost` is
@@ -155,7 +161,8 @@ allowed (api and presigned S3 URLs).
 ```
 apps/                  what gets deployed
   api/                 Node + TS REST API, outbox relay
-  notifier/            Node + TS Kafka consumer + SSE endpoint
+  notifier/            Node + TS Kafka consumer (webhooks, publishes live events)
+  sse-gateway/         Node + TS SSE endpoint, subscribes to live events
   processor/           Python worker (scan, thumbnail, retry/DLQ)
   web/                 browser app (React + TS, features/ + adapters/, built by Vite)
   node.Dockerfile      one image recipe for both Node apps
@@ -196,7 +203,7 @@ docker compose exec postgres psql -U api_user -d mediashare \
   -c "SELECT id, filename, status FROM files ORDER BY created_at DESC;"
 docker compose exec storage weed shell <<< "s3.bucket.list"
 curl --cacert infra/gateway/certs/ca.crt https://s3.localhost/media-thumbnails/<thumbKey>   # public bucket, no auth
-docker compose logs -f notifier | grep sse                     # SSE streams opening/closing
+docker compose logs -f sse-gateway | grep sse                     # SSE streams opening/closing
 ```
 
 ## Documentation

@@ -136,8 +136,8 @@ Honest gap: the retry topic has no backoff delay — a proper version uses wait-
 `processing` (claimed) → `ready`/`infected`/`failed`. Clients poll `GET /v1/files/:id`
 (the demo prints each transition). The `complete` endpoint is the sync/async boundary:
 it *verifies* the upload synchronously (HEAD + declared-size match → 409 on mismatch)
-before publishing. Push updates (webhooks/SSE) would slot into the notifier — it already
-consumes `file.ready`.
+before publishing. Push updates go through the notifier (it consumes `file.ready`): webhooks, and SSE via
+`sse-gateway`.
 
 If asked "why not make it synchronous?" — thumbnailing + scanning is CPU/IO work you
 don't want in the request path; failures shouldn't fail the upload; and workers scale
@@ -285,9 +285,9 @@ Follow-ups:
 ## Q: How do you push live updates to the browser, and how is the stream authenticated?
 
 **A:** Server-Sent Events: one long-lived HTTP response (`text/event-stream`) per tab,
-served by the notifier at `GET /v1/events` (`apps/notifier/src/sse/events-server.ts`).
-The notifier already consumes `file-events`, so every event whose `ownerId` matches the
-stream's user is written to it (`StreamRegistry.publish`). SSE, not WebSocket, because
+served by `sse-gateway` at `GET /v1/events` (`apps/sse-gateway/src/sse/events-server.ts`).
+The notifier consumes `file-events` and publishes each event for its owner to Redis;
+`sse-gateway` writes it to that user's open streams (`StreamRegistry.publish`). SSE, not WebSocket, because
 traffic is one-way (server → browser), it is plain HTTP through the gateway, and it needs no
 protocol upgrade.
 
@@ -331,9 +331,14 @@ Follow-ups:
   events, the webhook handler keeps working because publish failures are dropped, not
   thrown). Alternative: sticky routing by user to the partition owner, which breaks on
   every rebalance.
+- *"Why a separate sse-gateway?"* The stream must face the internet, the Kafka consumer
+  mustn't. Split (ADR 0005): the notifier is on `data` only; `sse-gateway` is on `edge` +
+  a network with just redis and lgtm, and its Redis ACL user can only
+  `SUBSCRIBE sse-events`. Checked from inside it: kafka/postgres `ENOTFOUND`, `FLUSHALL` /
+  `GET` / `PUBLISH` → `NOPERM`. Cost: one more service to run; the gateway still sees
+  every user's events (one shared channel).
 - *"Production hardening?"* A BFF with an `HttpOnly` session cookie makes plain
-  `EventSource` work, and a separate SSE gateway without Kafka credentials shrinks the
-  internet-facing surface (see SECURITY.md, "Notifier edge exposure").
+  `EventSource` work.
 
 ## Q: How is the feed built? Fan-out on read vs fan-out on write?
 
@@ -443,6 +448,8 @@ Redis layer exists.
 **A:** Edge vs data — like public/private subnets. Only the gateway publishes a port;
 it is *not* on the data network, so a compromised gateway has no route to Postgres,
 Kafka, or Redis. Workers aren't on the edge at all — the internet cannot address them.
+A third, tiny network (`sse`: sse-gateway, redis, lgtm) gives the SSE gateway Redis
+without handing it Kafka: segmentation by what each internet-facing piece actually needs.
 Presigned S3 traffic is the one deliberate exception: storage sits on both networks
 because S3's public endpoint is authorized by signatures and bucket policy, not network
 ACLs — exactly like real S3.

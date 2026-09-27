@@ -3,6 +3,7 @@ packages:
   - packages/*
   - apps/api
   - apps/notifier
+  - apps/sse-gateway
   - apps/web
 
 # Workspace deps are copied into dependents (not symlinked), so `pnpm deploy` can produce a

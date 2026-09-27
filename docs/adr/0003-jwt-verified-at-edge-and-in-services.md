@@ -5,7 +5,7 @@ status: accepted
 # JWTs are verified twice: at the edge and in every service
 
 The gateway validates Keycloak access tokens for `api.localhost` (Envoy `jwt_authn`,
-`infra/gateway/envoy.yaml`), and api and notifier **still verify the same token themselves**
+`infra/gateway/envoy.yaml`), and api and sse-gateway (the notifier until ADR 0005) **still verify the same token themselves**
 (`packages/auth`). Envoy forwards the `Authorization` header (`forward: true`) for that.
 This looks like duplicated work. It is deliberate: the two checks do different jobs.
 
@@ -18,7 +18,7 @@ This looks like duplicated work. It is deliberate: the two checks do different j
 ## Considered options
 
 - **Trust the edge**: services drop `packages/auth` and read claims from a header Envoy sets
-  (`forward_payload_header`). Rejected. api and notifier are on the `edge` network with
+  (`forward_payload_header`). Rejected. api and sse-gateway are on the `edge` network with
   keycloak, storage and ratelimit, and any of them can call `api:3000` directly, bypassing
   Envoy and sending any `sub`. A route or host added to Envoy without the per-route
   `requirement_name` would be open to everyone. And a compromised gateway could impersonate

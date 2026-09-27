@@ -23,10 +23,31 @@ services:
 
   redis:
     image: redis:8-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?}"]
+    # `default` (api, ratelimit, healthcheck) keeps full access. The live-events users can
+    # each run ONE command on ONE channel: the notifier publishes, the internet-facing
+    # sse-gateway subscribes. A compromised gateway can't FLUSHALL, touch rate-limit
+    # counters, or publish fake events. docs/SECURITY.md, "Notifier edge exposure".
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?}
+      - --user
+      - notifier
+      - "on"
+      - ">${REDIS_NOTIFIER_PASSWORD:?}"
+      - resetchannels
+      - "&sse-events"
+      - +publish
+      - --user
+      - sse-gateway
+      - "on"
+      - ">${REDIS_SSE_PASSWORD:?}"
+      - resetchannels
+      - "&sse-events"
+      - +subscribe
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?}
-    networks: [data]
+    networks: [data, sse]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s

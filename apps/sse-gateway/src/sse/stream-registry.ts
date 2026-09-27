@@ -1,15 +1,15 @@
 import type { ServerResponse } from 'node:http'
 import { trace } from '@opentelemetry/api'
 
-const tracer = trace.getTracer('mediashare-notifier/sse')
+const tracer = trace.getTracer('mediashare-sse-gateway/sse')
 
 /**
  * Registry pattern: the open SSE streams of each user, so an event can be routed to every
  * tab of the user it belongs to.
  *
  * The registry lives in this process's memory, so it only knows this replica's streams.
- * Events reach it through Redis fan-out (`redis/fanout.ts`), not straight from Kafka:
- * the replica that consumes an event is often not the one holding the user's stream.
+ * Events reach it from the notifier over Redis pub/sub (`redis/subscriber.ts`), and every
+ * replica receives every event, whichever replica holds the user's tabs.
  */
 export class StreamRegistry {
   private readonly streamsByUser = new Map<string, Set<ServerResponse>>()

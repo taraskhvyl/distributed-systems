@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Phase 3 experiment: does every open tab of a user get every live event, with N notifiers?
+"""Phase 3 experiment: does every open tab of a user get every live event, with N replicas?
 
-The file owner opens TABS SSE streams (Envoy spreads them over the notifier replicas),
+The file owner opens TABS SSE streams (Envoy spreads them over the sse-gateway replicas),
 then LIKERS other users each like one of the owner's published files, so each like emits
 one `file.liked` event. Prints how many events each tab received.
 

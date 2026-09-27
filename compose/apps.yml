@@ -10,10 +10,6 @@ x-auth-env: &auth-env
   AUTH_ISSUER: https://auth.localhost/realms/media
   AUTH_JWKS_URL: http://keycloak:8080/realms/media/protocol/openid-connect/certs
 
-# api: rate-limit buckets. notifier: SSE fan-out across replicas (pub/sub).
-x-redis-env: &redis-env
-  REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379
-
 # OpenTelemetry, zero-code: the SDK reads everything from env. Each service adds its own
 # OTEL_SERVICE_NAME. If lgtm is down, the SDK drops spans; the app keeps working.
 x-otel-env: &otel-env
@@ -50,13 +46,14 @@ services:
     environment:
       PORT: "3000"
       DATABASE_URL: postgres://api_user:${API_DB_PASSWORD:?}@postgres:5432/mediashare
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379
       # Write-bucket knobs (src/http/rate-limit.ts); a load run raises them to measure
       # capacity past policy. Empty = the defaults in apps/api/src/config.ts.
       RATE_LIMIT_CAPACITY: ${RATE_LIMIT_CAPACITY:-}
       RATE_LIMIT_REFILL_PER_SECOND: ${RATE_LIMIT_REFILL_PER_SECOND:-}
       KAFKA_BROKERS: kafka:9092
       # One merge key per mapping in YAML, so both anchors go in one list.
-      <<: [*auth-env, *redis-env, *node-otel-env]
+      <<: [*auth-env, *node-otel-env]
       S3_ENDPOINT_INTERNAL: http://storage:8333
       S3_ENDPOINT_PUBLIC: https://s3.localhost
       S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?}
@@ -113,18 +110,17 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Kafka consumer only: webhook notifications + live events handed to sse-gateway via
+  # Redis pub/sub. Not internet-facing, no HTTP server (no healthcheck, like processor).
   notifier:
     build:
       context: .
       dockerfile: apps/node.Dockerfile
       args: { SERVICE: notifier }
-    # edge: serves the browser's SSE stream via the gateway and fetches Keycloak's JWKS.
-    # This makes the notifier internet-facing (see docs/SECURITY.md).
-    networks: [edge, data]
-    env_file: [compose/env/web-origin.env]
+    networks: [data]
     environment:
-      PORT: "3001"
-      <<: [*auth-env, *redis-env, *node-otel-env]
+      <<: *node-otel-env
+      REDIS_URL: redis://notifier:${REDIS_NOTIFIER_PASSWORD:?}@redis:6379
       KAFKA_BROKERS: kafka:9092
       TOPIC_MAIN: file-events
       WEBHOOK_URL: ${WEBHOOK_URL:-}
@@ -136,6 +132,27 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Serves the browser's live-event stream (GET /v1/events, SSE) behind Envoy. The only
+  # internet-facing service besides api: no Kafka, no Postgres (network `sse` has only
+  # redis + lgtm), and its Redis user may only SUBSCRIBE to the live-events channel.
+  sse-gateway:
+    build:
+      context: .
+      dockerfile: apps/node.Dockerfile
+      args: { SERVICE: sse-gateway }
+    # edge: Envoy routes to it and it fetches Keycloak's JWKS. sse: redis + lgtm.
+    networks: [edge, sse]
+    env_file: [compose/env/web-origin.env]
+    environment:
+      PORT: "3001"
+      <<: [*auth-env, *node-otel-env]
+      REDIS_URL: redis://sse-gateway:${REDIS_SSE_PASSWORD:?}@redis:6379
+      OTEL_SERVICE_NAME: sse-gateway
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/healthz || exit 1"]
       interval: 10s

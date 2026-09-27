@@ -196,7 +196,7 @@ static_resources:
                         # CORS for the replies Envoy makes itself (jwt_authn 401, rate-limit 429).
                         # Without them the browser hides the status from JS: "Failed to fetch".
                         # ADD_IF_ABSENT: on upstream responses the service's own CORS headers win;
-                        # api and notifier stay the owners of CORS. Origin = WEB_ORIGIN in
+                        # api and sse-gateway stay the owners of CORS. Origin = WEB_ORIGIN in
                         # compose/env/web-origin.env (Envoy can't read compose env): change both.
                         - header: { key: Access-Control-Allow-Origin, value: https://app.localhost }
                           append_action: ADD_IF_ABSENT
@@ -209,13 +209,13 @@ static_resources:
                         - *no-referrer
                         - *hsts
                       routes:
-                        # Live events (SSE) are served by the notifier, under the api host so
+                        # Live events (SSE) are served by sse-gateway, under the api host so
                         # the browser talks to one api origin. Envoy streams responses (no
                         # buffering); the route timeout is off because the stream never
                         # "finishes", and idle_timeout outlives the 25 s heartbeat.
                         - match: { path: /v1/events }
                           route:
-                            cluster: notifier
+                            cluster: sse-gateway
                             timeout: 0s
                             idle_timeout: 3600s
                             rate_limits:
@@ -270,11 +270,11 @@ static_resources:
       load_assignment:
         cluster_name: api
         endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: api, port_value: 3000 } } } }] }]
-    - name: notifier
+    - name: sse-gateway
       type: STRICT_DNS
       load_assignment:
-        cluster_name: notifier
-        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: notifier, port_value: 3001 } } } }] }]
+        cluster_name: sse-gateway
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: sse-gateway, port_value: 3001 } } } }] }]
     - name: keycloak
       type: STRICT_DNS
       load_assignment:
