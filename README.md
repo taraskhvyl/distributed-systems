@@ -159,7 +159,7 @@ allowed (api and presigned S3 URLs).
 ## Repository layout
 
 ```
-apps/                  what gets deployed
+apps/                  what gets deployed (each app and package has its own README.md)
   api/                 Node + TS REST API, outbox relay
   notifier/            Node + TS Kafka consumer (webhooks, publishes live events)
   sse-gateway/         Node + TS SSE endpoint, subscribes to live events

@@ -191,7 +191,8 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   `docker compose logs api` interleaves all of them (prefix `api-N`).
 - Browser/ad-hoc tests as `alice`/`demo` change state that `make demo` asserts on
   (follows, likes, visibility). Undo it afterwards.
-- Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS). Keep them in sync with the code.
+- Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS), plus a `README.md` in every
+  `apps/*` and `packages/*` (what it does, layout, what it talks to). Keep them in sync with the code.
 - `CONTEXT.md` is the domain glossary (File, Published file, Feed, Lease…). Use its terms;
   update it when a term is settled.
 - `docs/adr/` records decisions that are hard to reverse, surprising, and a real trade-off.
