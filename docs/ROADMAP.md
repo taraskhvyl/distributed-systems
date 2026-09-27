@@ -287,6 +287,11 @@ Run in this order; each builds on the last.
 - [ ] **Retry backoff**: delayed retry topics (`retry-5s`, `retry-1m`) + DLQ replay tool
   - Prediction: _
 - [ ] **Graceful shutdown**: redeploy during k6 with zero failed requests (including open SSE streams)
+  - Already seen (Phase 3, scaling the processor 4 → 1): the processor has no SIGTERM handler.
+    Python dies on the spot, `consumer.close()` never runs (the group waits the 30 s session
+    timeout even on a planned stop), and a job cut mid-way stays `processing` until the
+    reaper frees it after the 120 s lease. A redelivered message can't rescue it: the CAS
+    claim sees `processing` and skips.
   - Prediction: _
 - [ ] **Zero-downtime schema change** (expand/contract) during k6 across 2 api replicas
   - Prediction: _
