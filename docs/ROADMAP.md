@@ -144,7 +144,7 @@ Follow-ups found in 2 (not scheduled):
 
 ## Phase 3 — Scaling (under load)
 
-- [ ] **k6 script** replaying upload + feed + like flows; baseline on 1 replica. Where is the first bottleneck?
+- [x] **k6 script** replaying upload + feed + like flows; baseline on 1 replica. Where is the first bottleneck?
   - Prediction: _the api's Postgres pool (`max: 10`)._
   - Run 1 (`make loadtest`, 20 VUs, 2 users, one IP): **wrong, never reached Postgres.**
     61% of 1,987 requests got 429: nginx per-IP 995, Redis per-user bucket 214. Pool at most
@@ -152,7 +152,33 @@ Follow-ups found in 2 (not scheduled):
     measures the throttles, not capacity.
     Side find: Fastify's own 4xx (empty JSON body) were answered 500; fixed.
   - Run 2 (after the gateway swap below, so it measures the new edge): load generator
-    exempt from per-IP limits, 50 test users (`setup()` creates them). Prediction: _
+    exempt from per-IP limits, 50 test users (`setup()` creates them). Prediction: _Keycloak._
+    **Wrong — Keycloak isn't on the request path at all.** 2,378 requests, 22/s: the only
+    Keycloak traffic during the run was one open browser tab's 5-min token refresh (tokens
+    are prefetched in `setup()`; both JWT checks verify against cached JWKS — local validation
+    keeps the IdP off the hot path by design). The first thing to give was a throttle again,
+    this time the api's own write bucket (5 burst, 0.5/s refill): 190 429s (8%), all on
+    writes — a like iteration spends 2 tokens/s per user (PUT + DELETE), 4× the refill;
+    like 21% rejected, upload_complete 30%. Zero from the edge: per-IP exempt, and the
+    10/s per-`sub` window was never close (≤2 req/s per user). Nothing else was loaded:
+    feed p95 18.7 ms, pool 2/10, 0 5xx. A virtual user writes faster than a human, so
+    policy saturates before capacity.
+  - Run 3 (policy off, capacity on): the write bucket → 1,000,000 via the new
+    `RATE_LIMIT_*` env knobs; edge per-user 10/s → 100,000/s in
+    `infra/ratelimit/config.yaml` (both reverted after). Climb VUs until a *resource* gives.
+    Prediction: _the api's Postgres pool (`max: 10`)_ — Run 1's, still untested.
+    **Confirmed at 200 VUs, with a twist: the pool is the cap, but *writes* fill it.**
+    100 VUs (98 req/s): 0 errors, p95 275 ms — a tail already, on the write path.
+    200 VUs (162 req/s): median 110 ms, p95 0.9 s, still **0 failed requests** —
+    saturation is queueing, not errors. Pool pinned 10/10; `pg_stat_activity` showed the
+    mechanism: 5 sessions `Lock/tuple` + 1 `Lock/transactionid` (every VU likes the *same*
+    file → `UPDATE files` serializes on one row), 1 `IO/WalSync` (each like holds its
+    connection through a fsync-bound COMMIT). Feeds slowed as innocent bystanders queued
+    behind write txns. Api-side `responseTime` p95 ≈ k6's p95 → the queue is inside the api;
+    Envoy/ratelimit (11% CPU) exonerated. Postgres CPU 31%: the pool caps *concurrency*,
+    not db capacity. The "Hot key" item below showed up early — it filled the pool before
+    its own experiment. Where the bottleneck moves next: `API_REPLICAS=3` (3 × 10 conns,
+    the hot row stays until sharded counters).
 - [ ] **Swap the gateway: nginx → Envoy.** Question: what does a real API gateway add over a
   reverse proxy, and what does it cost?
   - [x] Parity (`make demo` passes): TLS + HTTP/2, host routing (app/api/auth/s3), SSE

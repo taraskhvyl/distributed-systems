@@ -257,7 +257,9 @@ cloud ones is configuration, not code.
 - **api** is stateless (JWT validation is local; no server-side session) → horizontal scale
   behind the gateway: `API_REPLICAS=3` (default 1); Envoy finds replicas via Docker DNS and
   round-robins. First things to watch: postgres connection pool (`max: 10` per pod)
-  and JWKS cache hit rate.
+  and JWKS cache hit rate. Measured (k6, limits off): the pool pins first — write
+  transactions hold connections through fsync-bound COMMITs, and likes on one file
+  serialize on its `files` row; reads queue behind them. Saturation = latency, not errors.
 - **processor/notifier** scale to partition count, not beyond (3 here). More partitions =
   more parallelism, but per-file ordering only holds while the key-based mapping is stable.
 - **storage** is a single `weed mini` node here — appropriate for a laptop; SeaweedFS scales

@@ -132,7 +132,9 @@ independently of the API.
 auto-refreshed on key rotation by `jose`) from the internal network and verifies
 signature + `iss` + required claims **in-process** — zero extra round-trips per request
 vs token introspection, which would make Keycloak a per-request dependency and a
-bottleneck. Authorization is ownership (`owner_id` from the JWT `sub` — never client
+bottleneck. Measured (k6 run 2: 2,378 requests, 22/s): Keycloak saw **zero** of them —
+the only auth traffic in the window was one browser tab's 5-min token refresh.
+Authorization is ownership (`owner_id` from the JWT `sub` — never client
 input) plus realm roles for admin operations. One subtlety I can show: the JWKS URL is
 internal (`http://keycloak:8080/...`) while the `iss` claim is the external
 `https://auth.localhost/realms/media` — discovery vs validation are different concerns
@@ -391,6 +393,11 @@ share that Redis, so they are no longer separate failure domains (with nginx, th
 counters lived in nginx's own memory). Backstop: an Envoy `local_ratelimit` per process.
 Strictness vs availability is a per-system decision.
 Run `make demo` step 11: 3 accepted, 9 rate-limited.
+Under load (k6 run 2, 20 VUs, 50 users): every 429 came from this write bucket, none from
+the edge — a virtual user writes 2/s (like = PUT + DELETE), 4× the 0.5/s refill, while
+the edge's 10/s per-`sub` window was never close (≤2 req/s per user). Which layer answers
+depends on the traffic shape, not on which layer comes first — the innermost limit a
+client can out-write is the one that answers.
 
 Lesson from 1b: the browser showed only `Failed to fetch`. The cause was the gateway's (then nginx's) per-IP
 limit, which also covered the web app's static files. One login (Keycloak pages, ~10 ES
@@ -435,7 +442,15 @@ handlers (`apps/api/src/main.ts`) are right there in the compose file.
 ## Q: How does this scale?
 
 **A:** api is stateless → horizontal behind the gateway (watch pg pool sizes: `max: 10`
-per instance). Processor scales to partition count (3), then add partitions. Postgres
+per instance). Measured (k6, policy limits off): the pool is the first resource to give.
+At 162 req/s it pinned 10/10 and every request queued — but Postgres sat at 31% CPU.
+What fills the pool is *write transactions*: each holds a connection through a
+fsync-bound COMMIT (`pg_stat_activity`: `IO/WalSync`), and likes on one viral file
+serialize on its `files` row (`Lock/tuple` × 5) — the pool caps concurrency, not db
+capacity, and reads pay for writes' queue time. Saturation showed up as latency
+(median 110 ms, p95 0.9 s), not errors: 0 failed requests. Fix ladder: more replicas
+(3 × 10 conns) → PgBouncer (fixed connections to the db) → sharded counters for the
+hot row. Processor scales to partition count (3), then add partitions. Postgres
 read replicas for listing, partition the `outbox` by time if it grows, or move to CDC.
 Thumbnails behind a CDN with `Cache-Control` (public bucket already) — originals are
 presigned and never cached. Storage: SeaweedFS scales by adding volume servers; the S3
