@@ -87,10 +87,15 @@ lives in ARCHITECTURE "Tracing" and SECURITY "Trace context from clients").
     Side finding: every 250 ms relay tick made 4 orphan root traces (BEGIN/SELECT/COMMIT/connect).
   - Fix: `traceparent` column + `outbox publish` span under it → one trace; the gap before it
     is the outbox delay (~230 ms). Poll runs under `suppressTracing`: idle ticks → 0 traces.
-- [ ] Trace a like end to end: api → outbox → Kafka → notifier → SSE to the owner's browser
+- [x] Trace a like end to end: api → outbox → Kafka → notifier → SSE to the owner's browser
   - Server side done: trace ends in `sse.publish` (`sse.open_streams`), frame carries `traceId`.
-  - Open: confirm in a real browser that alice's console logs `[trace] received file.liked`
-    with the liker's traceId and shows the toast (the unconfirmed 1b toast). Prediction: _
+  - Outcome: demo liked alice's file in the browser; alice's console logged
+    `[trace] received file.liked traceId=621fe170…`, the same id as the `PUT` in Tempo.
+    Timeline: handler +6 ms, `outbox publish` +173 ms (relay poll wait), notifier
+    `sse.publish` +239 ms. Tempo shows "root span not yet received": the browser sends
+    `traceparent` but exports no spans of its own (would need a public OTLP endpoint).
+  - Toast: the code path ran (console line, then `showToast`), but it was not seen: it lives
+    5 s and was in another window. Re-check side by side (alice + demo in incognito).
 - [ ] `trace_id` in every log line (pino + `JsonFormatter`); jump trace → logs in Grafana
   - `trace_id` done in all three services. Open: verify the Tempo → Loki jump in Grafana.
 - [x] nginx passes through `traceparent`
