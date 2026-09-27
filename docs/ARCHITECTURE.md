@@ -2,7 +2,7 @@
 
 ## Bird's-eye view
 
-Three tiers, two networks, one exposed port.
+Three tiers, three networks, one exposed port.
 
 <!-- Same diagram as in README.md: keep both in sync. -->
 ```mermaid
@@ -87,6 +87,8 @@ sequenceDiagram
   participant Q as kafka
   participant W as processor
   participant N as notifier
+  participant R as redis
+  participant G as sse-gateway
 
   C->>K: POST /realms/media/token
   K-->>C: access token (JWT)
@@ -114,7 +116,9 @@ sequenceDiagram
   W->>P: status = ready, checksum
   W->>Q: file.ready
   Q->>N: consume file.ready
-  N-->>C: SSE event (if a tab is connected)
+  N->>R: PUBLISH sse-events (Live event)
+  R->>G: every sse-gateway replica
+  G-->>C: SSE event (only the replica holding the owner's tab)
   C->>A: GET /v1/files/:id (or poll)
   A-->>C: status ready + thumbnail URL
 ```
@@ -238,7 +242,7 @@ How the context crosses each hop:
 | relay/processor → Kafka → consumer | `traceparent` Kafka header | kafkajs / confluent-kafka instrumentation |
 | Kafka → processor handler | header extracted by hand | `apps/processor/src/kafka_loop.py` (the auto span only *links*) |
 | notifier → sse-gateway | `traceContext` field in the Redis pub/sub message | `encodeLiveEvent` / `decodeLiveEvent` in `packages/live-events` (by hand) |
-| notifier → browser | `traceId` field in the SSE frame | `StreamRegistry.publish` |
+| sse-gateway → browser | `traceId` field in the SSE frame | `StreamRegistry.publish` |
 
 Rule of thumb: automatic propagation lives in memory (async context) and stops at any
 async boundary that stores data, like a DB row or an already-open stream. There the
@@ -280,6 +284,13 @@ cloud ones is configuration, not code.
   serialize on its `files` row; reads queue behind them. Saturation = latency, not errors.
 - **processor/notifier** scale to partition count, not beyond (3 here). More partitions =
   more parallelism, but per-file ordering only holds while the key-based mapping is stable.
+  Measured: a 4th processor gets no partitions (the `range` assignor splits each topic
+  separately) and acts as a hot standby; a dead member's partitions move after the 30 s
+  `session.timeout.ms`. Watch it in Grafana → "Kafka consumers" (lag per partition).
+- **sse-gateway** scales horizontally, unrelated to partitions: every replica subscribes to
+  the Live events channel and writes to the tabs it holds, so Envoy may put a tab on any
+  replica (measured 20 / 20 / 20 over 3 replicas). Limit: every replica receives every
+  event (one channel); per-user channels are the next step.
 - **storage** is a single `weed mini` node here — appropriate for a laptop; SeaweedFS scales
   by adding volume servers (see its docs) and S3 gateways are stateless behind a balancer.
 - Hot objects (thumbnails) are the CDN story: public bucket + `Cache-Control` → served at

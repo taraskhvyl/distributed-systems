@@ -9,7 +9,7 @@ Each entry names the threat, the control, and the accepted trade-off.
 |---------------------------------|-------------------------------------------------------------------------|
 | Spoofing                        | OIDC JWTs signed by Keycloak, verified via cached JWKS at the edge (`jwt_authn`, `infra/gateway/envoy.yaml`) and again in each service (`packages/auth`) |
 | Tampering                       | TLS at the edge; SigV4-signed presigned URLs (method, path, host, expiry); sha256 checksum recorded at processing time |
-| Repudiation                     | structured JSON logs with `eventId` correlation across api/processor/notifier |
+| Repudiation                     | structured JSON logs with `eventId` correlation across api/processor/notifier/sse-gateway |
 | Information disclosure          | private uploads bucket + short-TTL presigned GETs; 404 (not 403) for other users' files; log redaction of `Authorization` |
 | Denial of service               | three rate-limit layers (gateway per-IP and per-user via `ratelimit`, api per-user write bucket; all in Redis) |
 | Elevation of privilege          | realm roles (`user`/`admin`) checked server-side; per-service DB roles and scoped S3 identities |
@@ -46,7 +46,7 @@ round-trip per request — validation is signature + claims, in-process.
 
 ## Network segmentation (the "subnets" story)
 
-Two Docker networks stand in for VPC subnets + security groups:
+Three Docker networks stand in for VPC subnets + security groups:
 
 - **edge** = public subnet. Hosts the gateway, keycloak, api, sse-gateway, and storage's S3 endpoint.
 - **data** = private subnet. Postgres, Kafka, Redis, storage, and the workers (processor, notifier).

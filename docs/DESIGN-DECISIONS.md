@@ -7,7 +7,9 @@ Every answer below is grounded in code you can open and point at.
 mediashare is a media-sharing platform: users upload files directly to S3-compatible
 storage via presigned URLs, the API records metadata and emits events through a
 transactional outbox to Kafka, and Python workers scan and thumbnail them with
-retry/DLQ semantics. Auth is OIDC with locally-validated JWTs, there are two
+retry/DLQ semantics. Live updates reach the browser over SSE from a separate edge
+service fed by Redis pub/sub, so nothing internet-facing touches Kafka. Auth is OIDC with
+locally-validated JWTs (at the edge and again in each service), there are three
 rate-limiting layers, and the network is segmented so the gateway can't reach the data
 stores. The whole system runs with one exposed port, and `make demo` walks through every
 flow — including failure modes — live.
@@ -312,19 +314,21 @@ Follow-ups:
 - *"What about events sent while disconnected?"* Not replayed. On every (re)connect the
   client reloads the file list (resync). The production answer is event ids +
   `Last-Event-ID` and a replayable store (e.g. Kafka offsets per user, or a short outbox).
-- *"Reconnect storms?"* Exponential backoff with jitter (50–150 %), capped at 30 s, so a
-  notifier restart doesn't bring every client back in the same instant.
+- *"Reconnect storms?"* Exponential backoff with jitter (50–150 %), capped at 30 s, so an
+  sse-gateway restart doesn't bring every client back in the same instant.
 - *"Proxies?"* The gateway must not buffer (Envoy streams by default; nginx needed
   `proxy_buffering off`) and must not time the stream out (route `timeout: 0s`,
   `idle_timeout: 3600s` in `envoy.yaml`); the server writes a `: ping` comment every 25 s so idle
   intermediaries keep the connection and dead peers are detected.
-- *"Does it scale?"* The registry is in one process's memory, and two unrelated routers
-  decide placement: Kafka gives the event to the partition's owner, Envoy spread the
-  browser's connections round-robin. Measured with 3 replicas, 3 tabs, 20 likes: **20 / 0 /
-  0** — all likes are on one file → one partition → one replica, which held one tab.
-  Fix: the consuming replica `PUBLISH`es to a Redis channel, every replica is subscribed
-  and delivers to the streams it holds → 20 / 20 / 20, one continuous trace (the trace
-  context rides inside the pub/sub message; auto-propagation stops there). Trade-offs:
+- *"Does it scale?"* Yes, through a pub/sub hop. The stream registry is in one process's
+  memory, so the process that gets an event from Kafka must not be the one that writes it
+  to the browser: two unrelated routers decide placement (Kafka gives the event to the
+  partition's owner, Envoy spreads browser connections round-robin). Measured when the
+  notifier still did both, with 3 replicas, 3 tabs, 20 likes: **20 / 0 / 0** — all likes
+  are on one file → one partition → one replica, which held one tab. Now the notifier
+  `PUBLISH`es each Live event to Redis and every `sse-gateway` replica subscribes and
+  writes to the tabs it holds → 20 / 20 / 20, one continuous trace (the trace context
+  rides inside the pub/sub message, `@mediashare/live-events`). Trade-offs:
   pub/sub is fire-and-forget (a replica cut off from Redis misses events: fine, SSE was
   already at-most-once); one channel means every replica sees every event (per-user
   channels when that costs too much); Redis is now on the push path (down → no live
@@ -443,9 +447,9 @@ with `ADD_IF_ABSENT`, so Envoy's own replies are readable and the services still
 also hurt real users behind one NAT (offices, mobile carriers); that's why the per-user
 Redis layer exists.
 
-## Q: Why is the network split in two?
+## Q: Why is the network split up?
 
-**A:** Edge vs data — like public/private subnets. Only the gateway publishes a port;
+**A:** Three networks. Edge vs data — like public/private subnets. Only the gateway publishes a port;
 it is *not* on the data network, so a compromised gateway has no route to Postgres,
 Kafka, or Redis. Workers aren't on the edge at all — the internet cannot address them.
 A third, tiny network (`sse`: sse-gateway, redis, lgtm) gives the SSE gateway Redis
@@ -468,16 +472,27 @@ ACLs — exactly like real S3.
   publishing pauses; the relay retries; consumers resume from committed offsets. Nothing
   is lost — the outbox is the buffer.
 - **processor** — events pile up in Kafka (that's backpressure *working*), files sit in
-  `uploaded`; new processor picks up from the committed offset.
+  `uploaded`; new processor picks up from the committed offset. Measured (killed under
+  load): the dead member's partition lagged for 30 s (`session.timeout.ms`), then another
+  member took it and drained it in 5 s. A job cut mid-way stays `processing` until the
+  reaper frees its Lease (120 s); the processor has no SIGTERM handler yet, so even a
+  planned stop behaves like a crash (roadmap Phase 4, "Graceful shutdown").
+- **notifier** — webhooks and Live events pause; its committed Kafka offsets hold the
+  backlog, so on restart it catches up and sends both, late. A Live event reaches only
+  tabs open at that moment (at-most-once; tabs resync on reconnect).
+- **sse-gateway** — open SSE streams drop; clients reconnect with backoff (to another
+  replica if there is one). Events during the gap are missed, not queued.
 - **postgres** — writes fail everywhere; healthchecks flip, `readyz` goes 503, the
   gateway keeps serving `/healthz`. This is the "you can't be consistent without your
   CP store" answer.
-- **redis** — rate limiting fails open (logged); everything else works.
+- **redis** — rate limiting fails open (logged); Live events stop (the notifier drops
+  them instead of blocking Kafka, so webhooks keep working); everything else works.
 - **storage** — uploads/downloads fail; metadata is intact; SeaweedFS restarts with its
   volume. (Laptop-single-node — prod story is replication/erasure coding.)
 
 Healthchecks with `depends_on: condition: service_healthy` and graceful SIGTERM
-handlers (`apps/api/src/main.ts`) are right there in the compose file.
+handlers (`apps/api/src/main.ts`, the Node services) are right there in the compose file;
+the processor's is still missing.
 
 ## Q: How does this scale?
 
