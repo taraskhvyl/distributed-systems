@@ -56,7 +56,7 @@ Q&A entries: PKCE and why it exists; CORS preflight on presigned URLs; SSE auth 
     50 vs 10, with 50 rows in `likes` either way (`scripts/experiment-like-race.sh`).
   - Prediction: _a like shows up in the owner's open tab instantly, no refresh._ **Correct for delivery:** the `file.liked` frame reached alice's stream
     0.25–0.43 s after the like (curl over HTTP/1.1 and HTTP/2, through the gateway). The browser toast was not confirmed; skipped.
-- [ ] UI: feed, follow button, like button, live notifications (all built; live toast not confirmed in a browser)
+- [x] UI: feed, follow button, like button, live notifications (toast confirmed side by side in two browser windows)
 
 Q&A entries: fan-out on read vs write; idempotent likes.
 
@@ -94,8 +94,8 @@ lives in ARCHITECTURE "Tracing" and SECURITY "Trace context from clients").
     Timeline: handler +6 ms, `outbox publish` +173 ms (relay poll wait), notifier
     `sse.publish` +239 ms. Tempo shows "root span not yet received": the browser sends
     `traceparent` but exports no spans of its own (would need a public OTLP endpoint).
-  - Toast: the code path ran (console line, then `showToast`), but it was not seen: it lives
-    5 s and was in another window. Re-check side by side (alice + demo in incognito).
+  - Toast: confirmed side by side (alice + demo in incognito). It was easy to miss, so it
+    moved top-right in the accent colour and stays 8 s.
 - [ ] `trace_id` in every log line (pino + `JsonFormatter`); jump trace → logs in Grafana
   - `trace_id` done in all three services. Open: verify the Tempo → Loki jump in Grafana.
 - [x] nginx passes through `traceparent`
