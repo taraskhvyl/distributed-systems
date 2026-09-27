@@ -10,7 +10,7 @@ is where the learning happens.
 Ground rules:
 - Runtime is **Docker Compose** for Phases 1–4. Kubernetes appears only as an optional Phase 5 topic.
 - Observability grows **with the experiments**: a metric is added in the phase whose experiment needs it.
-- Schema changes: edit `db/init/02-schema.sql` + `make reset`. No migration tool until one is needed.
+- Schema changes: edit `infra/postgres/init/02-schema.sql` + `make reset`. No migration tool until one is needed.
 - Instrumentation speaks OTLP only; the backend is swappable.
 - `make demo` must pass after every sub-phase. Every new endpoint gets a demo step.
 - Domain terms (File, Published file, Feed, …) are defined in [CONTEXT.md](../CONTEXT.md).
@@ -50,10 +50,10 @@ Q&A entries: PKCE and why it exists; CORS preflight on presigned URLs; SSE auth 
 - [x] Feed (**fan-out on read**: one SQL query over follows + published files)
   - Prediction: _following 1000 users instead of 3 makes the feed slower._ **Correct**, and the plan changes too:
     3 follows = index lookups per author, 0.5 ms; 1000 follows = Seq Scan over all 20k Published files, 27 ms
-    (`scripts/experiment-feed-plan.sh`).
+    (`tools/scripts/experiment-feed-plan.sh`).
 - [x] Likes: `likes (user_id, file_id)` PK, `like_count` updated in the same transaction, `file.liked` outbox event → SSE to the owner
   - Prediction: _50 concurrent likes: atomic `like_count + 1` ends at 50, read-modify-write below 50._ **Correct:**
-    50 vs 10, with 50 rows in `likes` either way (`scripts/experiment-like-race.sh`).
+    50 vs 10, with 50 rows in `likes` either way (`tools/scripts/experiment-like-race.sh`).
   - Prediction: _a like shows up in the owner's open tab instantly, no refresh._ **Correct for delivery:** the `file.liked` frame reached alice's stream
     0.25–0.43 s after the like (curl over HTTP/1.1 and HTTP/2, through the gateway). The browser toast was not confirmed; skipped.
 - [x] UI: feed, follow button, like button, live notifications (toast confirmed side by side in two browser windows)
@@ -63,7 +63,7 @@ Q&A entries: fan-out on read vs write; idempotent likes.
 Follow-ups found in 1b (not scheduled):
 - Private thumbnails via presigned GET, so unpublishing also revokes the thumbnail URL (SECURITY.md, "Thumbnails are capability URLs")
 - Optional: type-check the web app with JSDoc + `// @ts-check` and `tsc --noEmit` (keeps "no build step")
-- Optional frontend track: React + Vite + TS + Tailwind/shadcn rewrite of `web/` (drops "no build step"; bundle with the pnpm switch)
+- Optional frontend track: React + Vite + TS + Tailwind/shadcn rewrite of `apps/web/` (drops "no build step"; bundle with the pnpm switch)
 
 ## Phase 2 — Tracing
 
@@ -76,7 +76,7 @@ lives in ARCHITECTURE "Tracing" and SECURITY "Trace context from clients").
 - [x] Auto-instrument api + notifier (http, pg, ioredis, kafkajs, pino; `@fastify/otel` since
   the fastify instrumentation was removed); Python zero-code in processor with spans around scan/thumbnail
   - Processor: the confluent-kafka instrumentation only *links* a consumed message to its
-    producer, so `main.py` extracts `traceparent` and continues the trace. Upload → processor
+    producer, so `kafka_loop.py` extracts `traceparent` and continues the trace. Upload → processor
     → notifier is now one trace.
 - [x] Propagate `traceparent` **across the outbox**: store it in an outbox column in the same transaction, relay sets it as a Kafka header, consumers continue the trace
   - Prediction (before, plain auto-instrumentation): one trace, "the Kafka instrumentation passes it along".
@@ -103,7 +103,7 @@ lives in ARCHITECTURE "Tracing" and SECURITY "Trace context from clients").
     `{service_name="<span service>"} | trace_id = "<id>"`. All services at once:
     `{service_name=~".+"} | trace_id = "<id>"` in Explore → Loki.
 - [x] nginx passes through `traceparent`
-  - Browser starts the trace (`web/js/trace.js`). Prediction (sending it without a CORS change): like fails.
+  - Browser starts the trace (`apps/web/js/trace.js`). Prediction (sending it without a CORS change): like fails.
   - Outcome: correct. The preflight still returns 204, but `Access-Control-Allow-Headers` lacks
     `traceparent`, so the browser drops the real request ("Failed to fetch") and the api logs
     nothing. After adding it: a hand-made `traceparent` sent through the gateway came back in
@@ -118,7 +118,7 @@ Experiments:
     (the notifier's consumer lag); the processor (own group) handled it at +0.2 s. The
     notifier resumed from its committed offset and pushed the event 60 ms after start, but
     `sse.publish` had `open_streams = 0`: alice's reconnect backoff (1→30 s, jittered,
-    `web/js/live-events.js`) brought her back 26 s later. No toast; the like count was right
+    `apps/web/js/live-events.js`) brought her back 26 s later. No toast; the like count was right
     (resync on reconnect). Kafka → notifier is at-least-once, notifier → browser at-most-once.
     Fix if needed: a durable notifications inbox fetched on reconnect (+ `Last-Event-ID`).
 - [x] A processor failure → retry topic: does the retry continue the same trace?
@@ -136,7 +136,7 @@ Follow-ups found in 2 (not scheduled):
   auto-instrumentation (it links, we parent). Filter or disable if it gets noisy.
 - The processor's claim reaper queries run outside any span (periodic orphan traces).
 - Processor: an *unexpected* exception is logged and its offset still committed
-  (`main.py`, `except Exception`), so that class of errors is at-most-once. Phase 4 poison pill.
+  (`kafka_loop.py`, `except Exception`), so that class of errors is at-most-once. Phase 4 poison pill.
 - Dashboards: none yet on purpose (Explore covers single traces). First one comes with the
   Phase 3 consumer-lag metric.
 
@@ -169,7 +169,7 @@ Run in this order; each builds on the last.
 
 - [ ] **Kafka down**: **add outbox-backlog metric**; backlog grows, then drains, nothing lost
   - Prediction: _
-- [ ] **Poison pill**: a file that crashes the worker every time → `attempts` column → DLQ (closes the `ponytail:` in `consumer.py`)
+- [ ] **Poison pill**: a file that crashes the worker every time → `attempts` column → DLQ (closes the `ponytail:` in `pipeline/handler.py`)
   - Prediction: _
 - [ ] **Network partition** (`docker network disconnect` one processor): a zombie worker finishes after its lease was reaped → double execution. Why a lease ≠ mutual exclusion; fencing tokens.
   - Prediction: _

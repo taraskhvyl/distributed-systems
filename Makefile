@@ -6,7 +6,7 @@ env:
 	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example")
 
 certs: env
-	@./scripts/gen-certs.sh
+	@./tools/scripts/gen-certs.sh
 
 build: certs
 	docker compose build
@@ -37,13 +37,13 @@ kafka-ui:
 	@echo "Kafka UI (read-only): http://127.0.0.1:8080"
 
 demo: $(VENV)/.stamp
-	$(VENV)/bin/python demo/client.py
+	$(VENV)/bin/python tools/demo/client.py
 
-$(VENV)/.stamp: demo/requirements.txt
+$(VENV)/.stamp: tools/demo/requirements.txt
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install -q -r demo/requirements.txt
+	$(VENV)/bin/pip install -q -r tools/demo/requirements.txt
 	@touch $(VENV)/.stamp
 	@echo "Demo virtualenv ready: $(VENV)"
 
 clean:
-	rm -rf $(VENV) demo/out
+	rm -rf $(VENV) tools/demo/out

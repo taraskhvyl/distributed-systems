@@ -7,7 +7,7 @@ status: accepted
 Follows and Feeds need usernames and a way to find people, but Keycloak owns identities and
 the api only sees a user's JWT. The api keeps its own `users (id = sub, username)` table and
 **upserts the caller on every authenticated request** (`rememberUser` hook,
-`services/api/src/users.ts`), from the token's `sub` and `preferred_username`. The upsert
+`apps/api/src/users/repository.ts`), from the token's `sub` and `preferred_username`. The upsert
 only writes when the username changed. `files.owner_id`, `follows` and `likes` reference it
 with foreign keys.
 

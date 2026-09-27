@@ -57,39 +57,57 @@ prediction. Tick an item only when it has been run **and** its Q&A entry exists 
 ```bash
 make up      # .env + TLS certs + build + start (only gateway :443 is exposed)
 make ps      # wait until everything is healthy
-make demo    # end-to-end walkthrough (demo/client.py); this is the main test
+make demo    # end-to-end walkthrough (tools/demo/client.py); this is the main test
 make logs    # follow all services
 make kafka-ui  # opt-in read-only Kafka dashboard on http://127.0.0.1:8080 (profile tools)
 # Grafana (traces + logs, always on): http://127.0.0.1:3000 → Explore → Tempo / Loki
 docker compose exec -T lgtm curl -sG localhost:3200/api/search --data-urlencode 'q={ name = "PUT /v1/files/:id/like" }'  # find traces (TraceQL)
 docker compose exec -T lgtm curl -s localhost:3200/api/traces/<traceId>   # full trace JSON; span ids are base64
 make down    # stop, keep data
-make reset   # stop + wipe volumes (needed after editing db/init/*)
+make reset   # stop + wipe volumes (needed after editing infra/postgres/init/*)
 docker compose up -d --build <service>   # rebuild one service after a code change
 docker compose exec postgres psql -U api_user -d mediashare
 ```
 
 There is no unit test suite. `make demo` asserts every flow.
-Ad-hoc scripts: `.venv/bin/python`, `sys.path.insert(0, "demo")`, `from client import get_token`
+Ad-hoc scripts: `.venv/bin/python`, `sys.path.insert(0, "tools/demo")`, `from client import get_token`
 (seeded users, same defaults as the demo; keeps passwords out of chat).
 
-## Architecture
+## Code layout inside an app
 
-- `services/api`: Node 24 + TS (Fastify 5). Auth (Keycloak JWT), presigned S3 URLs,
-  idempotency keys, transactional outbox relay (`src/outbox.ts`).
-- `services/processor`: Python 3.14 Kafka consumer. Scan + thumbnail, CAS claim, retry/DLQ,
-  expired-claim reaper (`src/consumer.py`, `src/db.py`).
-- `services/notifier`: Node consumer (separate consumer group) + SSE endpoint
-  `GET /v1/events` for the browser (`src/events-server.ts`, `src/stream-registry.ts`).
+Feature folders plus adapters. Dependencies point one way: `routes → service → repository`,
+and everything external (Postgres, S3, Redis, Kafka) is reached only through `adapters/`.
+
+- `main.ts` / `main.py`: composition root. Builds and wires the parts; no logic.
+- `<feature>/routes.ts`: HTTP only (schema, call the service, serialize). No SQL, no S3.
+- `<feature>/service.ts`: what an operation does, step by step. No HTTP, no SQL.
+  Expected failures are `throw new DomainError(code, message)` (`src/errors.ts`); the
+  error handler in `http/app.ts` maps the code to a status. Anything else is a logged 500.
+- `<feature>/repository.ts`: SQL only. Writes that must emit an event call
+  `insertOutboxEvent` inside the same transaction.
+- `http/`: Fastify app, hooks (auth, rate limit), schemas shared across features.
+
+A new endpoint touches its feature's three files; a new external system gets an adapter.
+
+Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party config),
+`tools/` (demo, scripts; never deployed), `docs/`.
+
+- `apps/api`: Node 24 + TS (Fastify 5). Auth (Keycloak JWT), presigned S3 URLs,
+  idempotency keys, transactional outbox relay (`src/messaging/outbox.ts`).
+- `apps/processor`: Python 3.14 Kafka consumer. Scan + thumbnail, CAS claim, retry/DLQ,
+  expired-claim reaper (`src/pipeline/handler.py`, `src/adapters/db.py`); poll/commit
+  loop in `src/kafka_loop.py`.
+- `apps/notifier`: Node consumer (separate consumer group) + SSE endpoint
+  `GET /v1/events` for the browser (`src/sse/events-server.ts`, `src/sse/stream-registry.ts`).
 - `packages/auth`: shared JWT verification (`@mediashare/auth`), used by api and notifier.
   Node services are a pnpm workspace (`pnpm-workspace.yaml`; shared package referenced as
-  `workspace:*`) built by one two-stage `services/node.Dockerfile` from the repo root
+  `workspace:*`) built by one two-stage `apps/node.Dockerfile` from the repo root
   (build context `.`; `.dockerignore` keeps `.env` and certs out). Adding a dependency:
   `pnpm --filter <service> add <pkg>`, then commit `pnpm-lock.yaml` (the image build uses
   `--frozen-lockfile` and fails on a stale lockfile).
-- `web/`: static browser app (`app.localhost`), native ES modules in `web/js/`, no build step.
-- `gateway/nginx.conf`: TLS, host routing, per-IP rate limit, CSP for the web app.
-- `db/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need
+- `apps/web/`: static browser app (`app.localhost`), native ES modules in `apps/web/js/`, no build step.
+- `infra/gateway/nginx.conf`: TLS, host routing, per-IP rate limit, CSP for the web app.
+- `infra/postgres/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need
   `make reset` (or a manual `ALTER` on a running db).
 - `lgtm` (`grafana/otel-lgtm`): OTLP backend for traces (Tempo) and logs (Loki), on `data`.
   Tracing is zero-code, configured by the `x-otel-env` / `x-node-otel-env` compose anchors.

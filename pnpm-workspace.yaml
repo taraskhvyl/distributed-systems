@@ -1,8 +1,8 @@
 # pnpm workspace: shared packages/* used by the Node services.
 packages:
   - packages/*
-  - services/api
-  - services/notifier
+  - apps/api
+  - apps/notifier
 
 # Workspace deps are copied into dependents (not symlinked), so `pnpm deploy` can produce a
 # self-contained folder per service for its Docker image.

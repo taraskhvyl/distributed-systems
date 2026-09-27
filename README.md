@@ -9,11 +9,11 @@ all running locally via Docker Compose.
 <!-- Same diagram as in docs/ARCHITECTURE.md: keep both in sync. -->
 ```mermaid
 flowchart LR
-  browser["browser / demo/client.py"] -- "HTTPS :443" --> gateway
+  browser["browser / tools/demo/client.py"] -- "HTTPS :443" --> gateway
 
   subgraph edge["mediashare-edge network"]
     gateway["gateway (nginx)"]
-    web["static web app (web/)"]
+    web["static web app (apps/web/)"]
     keycloak["keycloak (OIDC, JWT)"]
     api["api (Node + TS)"]
     notifier["notifier (Node, SSE)"]
@@ -65,14 +65,14 @@ watch the progress bar, and see its status change live (`uploaded → ready`) wi
 refreshing.
 
 Requirements: Docker + Docker Compose, Python 3. `make up` generates a local dev CA and a
-server certificate for `app/api/auth/s3.localhost` under `gateway/certs/` (macOS resolves
+server certificate for `app/api/auth/s3.localhost` under `infra/gateway/certs/` (macOS resolves
 `*.localhost` to 127.0.0.1 automatically; on Linux add the names to `/etc/hosts` if needed).
 
 To use the browser app (https://app.localhost) without warnings, trust the CA once, then
 fully quit and reopen the browser:
 
 ```bash
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain gateway/certs/ca.crt  # macOS
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain infra/gateway/certs/ca.crt  # macOS
 ```
 
 The demo client narrates every step and asserts each behavior:
@@ -143,15 +143,26 @@ CORS: only the origin `https://app.localhost` is allowed (api and presigned S3 U
 ## Repository layout
 
 ```
-services/api         Node + TS REST API          services/notifier   Node + TS consumer + SSE
-services/processor   Python worker               packages/auth       shared JWT verification
-web/                 browser app (ES modules)    gateway/            nginx config + certs
-db/init/             schema + roles              keycloak/           realm import
-demo/                end-to-end client           docs/               architecture, security, Q&A
+apps/                  what gets deployed
+  api/                 Node + TS REST API, outbox relay
+  notifier/            Node + TS Kafka consumer + SSE endpoint
+  processor/           Python worker (scan, thumbnail, retry/DLQ)
+  web/                 browser app (ES modules, no build step)
+  node.Dockerfile      one image recipe for both Node apps
+packages/
+  auth/                shared JWT verification (@mediashare/auth)
+infra/                 config for third-party components
+  gateway/             nginx config + TLS certs
+  keycloak/            realm import
+  postgres/init/       schema + roles (fresh volume only)
+tools/                 dev and test tooling, never deployed
+  demo/                end-to-end client (`make demo`)
+  scripts/             experiments, cert generation
+docs/                  architecture, security, Q&A, ADRs, roadmap
 ```
 
 Node services are a **pnpm workspace** (`pnpm-workspace.yaml`, lockfile `pnpm-lock.yaml`), built
-by one two-stage `services/node.Dockerfile` from the repo root: the build stage installs with
+by one two-stage `apps/node.Dockerfile` from the repo root: the build stage installs with
 `--frozen-lockfile` and compiles, then `pnpm deploy --prod` writes just the service's `dist/`
 and production dependencies for the runtime image. For editor types locally: `pnpm install`
 (pnpm is pinned in `package.json` → `packageManager`; `corepack enable` provides it).
@@ -168,7 +179,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
 docker compose exec postgres psql -U api_user -d mediashare \
   -c "SELECT id, filename, status FROM files ORDER BY created_at DESC;"
 docker compose exec storage weed shell <<< "s3.bucket.list"
-curl --cacert gateway/certs/ca.crt https://s3.localhost/media-thumbnails/<thumbKey>   # public bucket, no auth
+curl --cacert infra/gateway/certs/ca.crt https://s3.localhost/media-thumbnails/<thumbKey>   # public bucket, no auth
 docker compose logs -f notifier | grep sse                     # SSE streams opening/closing
 ```
 

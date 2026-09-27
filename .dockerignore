@@ -4,6 +4,6 @@
 .venv
 **/node_modules
 **/dist
-gateway/certs
+infra/gateway/certs
 demo
 docs

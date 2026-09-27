@@ -22,7 +22,7 @@ scale — the API becomes a bandwidth-bound proxy doing no useful work. With pre
 PUTs the API only does what it's for: authorization and metadata. The client uploads
 straight to S3 through the same gateway host (`s3.localhost`), the URL is bound to one
 method + one key + one expiry, and it's signed with credentials that only have
-`Write` on that bucket (`docker-compose.yml`, storage identities; `services/api/src/s3.ts`).
+`Write` on that bucket (`docker-compose.yml`, storage identities; `apps/api/src/adapters/s3.ts`).
 
 Common follow-up questions:
 - *"What's actually in the signature?"* — method, path (bucket+key), host, expiry,
@@ -34,16 +34,16 @@ Common follow-up questions:
 - *"Large files?"* — multipart upload with presigned part URLs (same mechanism, more URLs);
   the API's 200 MB cap is the demo's policy choice.
 - *"We hit this in production..."* — the AWS SDK checksum story (`BadDigest`,
-  `requestChecksumCalculation: 'WHEN_REQUIRED'` in `services/api/src/s3.ts`) is a real
+  `requestChecksumCalculation: 'WHEN_REQUIRED'` in `apps/api/src/adapters/s3.ts`) is a real
   production-grade anecdote that shows you've actually done this.
 
 ## Q: How do you keep the DB and Kafka consistent? (the dual-write problem)
 
 **A:** You can't reliably do "UPDATE row, then publish" or the reverse — either order has
 a crash window that strands one side. So `complete` commits *both* the state change and
-an event row in one postgres transaction (`services/api/src/file-routes.ts`, `withTransaction`; helper `insertOutboxEvent` in `outbox.ts`),
+an event row in one postgres transaction (`markUploaded` in `apps/api/src/files/repository.ts`; helper `insertOutboxEvent` in `messaging/outbox.ts`),
 and a relay publishes rows where `published_at IS NULL`
-(`services/api/src/outbox.ts`). That's the **transactional outbox pattern**.
+(`apps/api/src/messaging/outbox.ts`). That's the **transactional outbox pattern**.
 
 Details worth knowing:
 - The relay's read is `SELECT ... FOR UPDATE SKIP LOCKED` — multiple relay instances can
@@ -59,14 +59,14 @@ Details worth knowing:
 
 1. **API idempotency key** — `POST /v1/files` accepts an `Idempotency-Key`; a partial
    unique index `(owner_id, idempotency_key)` + `ON CONFLICT DO NOTHING` makes retries
-   return the original file instead of creating twins (`services/api/src/file-routes.ts`).
+   return the original file instead of creating twins (`apps/api/src/files/service.ts`, `registerUpload`).
    The demo's step 4 replays the key and gets the same id back.
 2. **Consumer claim (compare-and-set)** — the processor's first action is
    `UPDATE files SET status='processing' WHERE id=$1 AND status='uploaded'`
-   (`services/processor/src/db.py`). If the rowcount is 0, someone else already claimed
+   (`apps/processor/src/adapters/db.py`). If the rowcount is 0, someone else already claimed
    it — skip. This makes redelivery *and* concurrent workers safe with zero locks.
 3. **Committed offsets only after success** — manual `consumer.commit(message=msg)` after
-   each handled event (`services/processor/src/main.py`), so a crash re-delivers rather
+   each handled event (`apps/processor/src/kafka_loop.py`), so a crash re-delivers rather
    than loses.
 
 ## Q: Explain the Kafka setup.
@@ -93,7 +93,7 @@ retry can re-claim), and republishes to `file-events-retry` with `attempt+1`. Af
 attempts it writes to the DLQ, marks the file `failed`, and emits `file.failed` (the
 notifier would tell the user). Poison messages (bad JSON) are dropped with an error log
 and the offset is committed — one bad event must not wedge a partition
-(`services/processor/src/consumer.py`). There is a real dead-lettered event in the DLQ
+(`apps/processor/src/pipeline/handler.py`). There is a real dead-lettered event in the DLQ
 from bring-up debugging — open it live:
 `docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic file-events-dlq --from-beginning`.
 
@@ -103,7 +103,7 @@ Kafka redelivery alone doesn't help: the redelivered event hits a row that is st
 So the claim is a **lease**. `updated_at` is stamped at claim time, and every 30 s each
 processor runs a reaper that resets claims older than 120 s back to `uploaded` and
 re-enqueues a `file.uploaded` on the retry topic (`reap_expired` in
-`services/processor/src/db.py`). The reset is one atomic `UPDATE ... RETURNING`, so
+`apps/processor/src/adapters/db.py`). The reset is one atomic `UPDATE ... RETURNING`, so
 concurrent reapers never double-enqueue. The cost is that a worker that is *slow* rather
 than dead loses its lease and the job runs twice. That's harmless here because outputs
 are deterministic, but a system with side effects would need fencing tokens.
@@ -136,7 +136,7 @@ bottleneck. Authorization is ownership (`owner_id` from the JWT `sub` — never 
 input) plus realm roles for admin operations. One subtlety I can show: the JWKS URL is
 internal (`http://keycloak:8080/...`) while the `iss` claim is the external
 `https://auth.localhost/realms/media` — discovery vs validation are different concerns
-(`services/api/src/auth.ts`, `services/api/src/config.ts`).
+(`apps/api/src/http/auth.ts`, `apps/api/src/config.ts`).
 
 Related details: why 404 instead of 403 on other people's files (existence leak), why the
 CLI demo uses the password grant while the browser app uses auth-code + PKCE (next
@@ -151,7 +151,7 @@ so it can't hold a client secret. Without a secret, whoever holds the authorizat
 there is: the URL (history, logs, other apps, malicious extensions).
 
 PKCE (RFC 7636) replaces the static secret with a **one-time secret per login**
-(`web/app.js`, `login()` / `handleRedirect()`):
+(`apps/web/app.js`, `login()` / `handleRedirect()`):
 
 1. The app makes a random `code_verifier` and sends only `code_challenge = SHA-256(verifier)`
    in the `/auth` redirect.
@@ -160,13 +160,13 @@ PKCE (RFC 7636) replaces the static secret with a **one-time secret per login**
 
 An intercepted code is useless without the verifier, and the verifier never touched the
 URL. `state` is a separate thing: it binds the callback to the login *this* tab started
-(login CSRF). The `media-web` client **enforces** S256 (`keycloak/media-realm.json`);
+(login CSRF). The `media-web` client **enforces** S256 (`infra/keycloak/media-realm.json`);
 a request without a challenge gets `invalid_request`.
 
 Follow-ups:
 - *"Where do tokens live?"* In a JS variable only. `localStorage` survives forever and any
   XSS can read it; memory limits theft to the XSS's lifetime. The strict CSP on
-  `app.localhost` (`gateway/nginx.conf`) is the XSS mitigation. Cost: a reload loses the
+  `app.localhost` (`infra/gateway/nginx.conf`) is the XSS mitigation. Cost: a reload loses the
   tokens, so the app does a **silent login** on load: the same PKCE redirect with
   `prompt=none` ("only if you already know me, never show a form"). With a Keycloak SSO
   cookie it comes straight back with a code; without one, `error=login_required` and the
@@ -194,7 +194,7 @@ Experiment (run): log in on `https://app.localhost`, then open
 
 - **Rate limit vs page weight.** The account console loads ~25 static files in one burst,
   drained the per-IP `edge` bucket, and the `/token` POST right after got 429. Fix:
-  `/resources/` is exempt (`gateway/nginx.conf`), like the web app's static files.
+  `/resources/` is exempt (`infra/gateway/nginx.conf`), like the web app's static files.
 - **Signature valid ≠ token meant for me.** The Account API returned 401: seeded users
   had only `user`, not the realm default role, so their tokens carried no
   `aud: account`. Keycloak's own APIs check `aud`; ours only check `iss` (fine while one
@@ -220,7 +220,7 @@ What we saw, in order:
 1. **api without CORS**: `OPTIONS /v1/files` → 404 with no `Access-Control-*`. The gateway
    log shows *only* the OPTIONS; the `GET` never left the browser. JS sees only
    `Failed to fetch`: it is not allowed to learn why.
-2. **api with `@fastify/cors`** (`services/api/src/server.ts`): one exact origin from
+2. **api with `@fastify/cors`** (`apps/api/src/http/app.ts`): one exact origin from
    `WEB_ORIGIN`, allowed headers `Authorization, Content-Type, Idempotency-Key`,
    `exposedHeaders: Retry-After` (else JS can't read it on a 429), `maxAge: 600` so each
    call doesn't cost two round trips. Preflights are answered before the auth hook: they
@@ -246,7 +246,7 @@ Follow-ups:
 ## Q: How do you push live updates to the browser, and how is the stream authenticated?
 
 **A:** Server-Sent Events: one long-lived HTTP response (`text/event-stream`) per tab,
-served by the notifier at `GET /v1/events` (`services/notifier/src/events-server.ts`).
+served by the notifier at `GET /v1/events` (`apps/notifier/src/sse/events-server.ts`).
 The notifier already consumes `file-events`, so every event whose `ownerId` matches the
 stream's user is written to it (`StreamRegistry.publish`). SSE, not WebSocket, because
 traffic is one-way (server → browser), it is plain HTTP through nginx, and it needs no
@@ -260,12 +260,12 @@ The hard part is **auth**, because the browser's `EventSource` can't send an
 | token in the query string | `EventSource('/events?access_token=…')` | the token lands in access logs (our nginx log records `$request_uri`), browser history, `Referer` |
 | cookie | `EventSource` sends cookies | needs a cookie session (i.e. a BFF) plus CSRF thinking |
 | one-time ticket | `POST /events/ticket` with the bearer → 30 s single-use ticket in the URL | still a URL secret, but short-lived and single-use; needs a ticket store |
-| **`fetch()` + header** (ours) | read `res.body` as a stream, parse frames (`web/js/sse-parser.js`) | we reimplement reconnect and parsing that `EventSource` gives for free |
+| **`fetch()` + header** (ours) | read `res.body` as a stream, parse frames (`apps/web/js/sse-parser.js`) | we reimplement reconnect and parsing that `EventSource` gives for free |
 
 **Token expiry on a long-lived connection.** The token is verified once, at connect.
 Without more, a stream opened with a 5-minute token would stay authorized forever, and a
 disabled user would keep receiving events. So the server closes the stream at the token's
-`exp`, and the client reconnects with a refreshed token (`web/js/live-events.js`).
+`exp`, and the client reconnects with a refreshed token (`apps/web/js/live-events.js`).
 Observed: stream opened with `closesInMs: 299899`, closed exactly 5 minutes later, and
 reopened in the same second. Revocation latency is bounded by the token TTL.
 
@@ -289,7 +289,7 @@ Follow-ups:
 
 **A:** **Fan-out on read.** Nothing is precomputed. `GET /v1/feed` runs one query:
 follows ⨝ files (Published only) ⨝ users, newest first, `LIMIT 20`
-(`readFeed` in `services/api/src/social-routes.ts`). A partial index
+(`readFeed` in `apps/api/src/social/repository.ts`). A partial index
 `files (owner_id, created_at DESC, id DESC) WHERE visibility='public' AND status='ready'`
 serves the per-author lookup.
 
@@ -301,7 +301,7 @@ serves the per-author lookup.
 | freshness | always exact (unpublish = gone instantly) | eventually consistent; unpublish/unfollow must clean up copies |
 | breaks at | users following thousands of people | celebrities with millions of followers (one post = millions of writes) |
 
-Measured (`scripts/experiment-feed-plan.sh`; 1000 authors × 20 Published files + 50k
+Measured (`tools/scripts/experiment-feed-plan.sh`; 1000 authors × 20 Published files + 50k
 private): following 3 users → nested loop over the partial index, 60 rows read,
 **0.5 ms**. Following 1000 → the planner switches to a Seq Scan over all 20,000 Published
 files + hash join, **27 ms**, to return 20 rows. The work is proportional to what you follow,
@@ -328,7 +328,7 @@ Follow-ups:
 changes nothing, so a retry after a timeout is safe with no Idempotency-Key.
 (`POST /like` as a toggle would not be: a retried request would undo the first.)
 
-One transaction (`likeFile` in `services/api/src/social-routes.ts`):
+One transaction (`insertLike` in `apps/api/src/social/repository.ts`):
 1. `SELECT … FOR UPDATE` the file, and only if it's Published (else 404).
 2. `INSERT INTO likes … ON CONFLICT DO NOTHING RETURNING 1`. The `(user_id, file_id)`
    primary key does the deduplication, not application code.
@@ -339,7 +339,7 @@ One transaction (`likeFile` in `services/api/src/social-routes.ts`):
 `like_count` is a **denormalized** copy of `count(*) FROM likes`: fast to read (the feed
 shows it for every file), but it must be kept in step with the rows. Two ways to break that:
 - **Lost update**: read the count into Node, write back `count + 1`. Measured
-  (`scripts/experiment-like-race.sh`, 50 concurrent likers): **atomic `like_count + 1` →
+  (`tools/scripts/experiment-like-race.sh`, 50 concurrent likers): **atomic `like_count + 1` →
   50; read-modify-write → 10**, while `likes` holds 50 rows. Under READ COMMITTED many
   sessions read the same value and each writes back value + 1.
 - **Count without row, or row without count**: fixed by doing both in one transaction.
@@ -402,7 +402,7 @@ ACLs — exactly like real S3.
   volume. (Laptop-single-node — prod story is replication/erasure coding.)
 
 Healthchecks with `depends_on: condition: service_healthy` and graceful SIGTERM
-handlers (`services/api/src/server.ts`) are right there in the compose file.
+handlers (`apps/api/src/main.ts`) are right there in the compose file.
 
 ## Q: How does this scale?
 

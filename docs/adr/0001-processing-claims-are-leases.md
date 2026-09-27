@@ -31,7 +31,7 @@ work on the retry topic.
   processing with external side effects needs **fencing tokens**. See ROADMAP Phase 3,
   "Network partition".
 - The lease (120 s) must exceed the slowest legitimate job; tune
-  `claim_lease_seconds` in `services/processor/src/config.py` if jobs get heavier.
+  `claim_lease_seconds` in `apps/processor/src/config.py` if jobs get heavier.
 - A file that crashes the worker every time is re-queued forever until an `attempts`
   counter routes it to the DLQ (ROADMAP Phase 3, "Poison pill").
 - Recovery latency after a crash is up to lease + reap interval (~150 s).
