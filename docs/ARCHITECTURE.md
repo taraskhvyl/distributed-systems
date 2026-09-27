@@ -227,7 +227,7 @@ Rule of thumb: automatic propagation lives in memory (async context) and stops a
 async boundary that stores data, like a DB row or an already-open stream. There the
 context must travel *with the data*.
 
-Setup is zero-code: env in the `x-otel-env` / `x-node-otel-env` compose anchors
+Setup is zero-code: env in the `x-otel-env` / `x-node-otel-env` anchors (`compose/apps.yml`)
 (`NODE_OPTIONS` loads the ESM hook + auto-instrumentations; the processor starts via
 `opentelemetry-instrument`). Only the propagation gaps above and a few spans are code.
 Logs carry `trace_id` (pino instrumentation; `log.JsonFormatter` in the processor).

@@ -171,6 +171,8 @@ tools/                 dev and test tooling, never deployed
   demo/                end-to-end client (`make demo`)
   scripts/             experiments, cert generation
 docs/                  architecture, security, Q&A, ADRs, roadmap
+docker-compose.yml     the map: networks, volumes, includes the tiers below
+compose/               data.yml, edge.yml, apps.yml, observability.yml, tools.yml (+ env/)
 ```
 
 The Node services and the web app are a **pnpm workspace** (`pnpm-workspace.yaml`, lockfile

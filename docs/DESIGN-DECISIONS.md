@@ -22,7 +22,7 @@ scale — the API becomes a bandwidth-bound proxy doing no useful work. With pre
 PUTs the API only does what it's for: authorization and metadata. The client uploads
 straight to S3 through the same gateway host (`s3.localhost`), the URL is bound to one
 method + one key + one expiry, and it's signed with credentials that only have
-`Write` on that bucket (`docker-compose.yml`, storage identities; `apps/api/src/adapters/s3.ts`).
+`Write` on that bucket (`compose/data.yml`, storage identities; `apps/api/src/adapters/s3.ts`).
 
 Common follow-up questions:
 - *"What's actually in the signature?"* — method, path (bucket+key), host, expiry,
@@ -249,7 +249,7 @@ What we saw, in order:
    there is a preflight to the *storage* origin. The prediction was "SeaweedFS rejects it".
    Wrong for SeaweedFS (its `-s3.allowedOrigins` defaults to `*`, reflecting any Origin),
    right for **AWS S3**, which rejects every preflight until the bucket has a CORS rule.
-   We now pin `-s3.allowedOrigins=https://app.localhost` (`docker-compose.yml`); on AWS it
+   We now pin `-s3.allowedOrigins=https://app.localhost` (`compose/data.yml`); on AWS it
    is a per-bucket rule managed as code (Terraform `aws_s3_bucket_cors_configuration`).
 
 Follow-ups:

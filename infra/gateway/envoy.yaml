@@ -87,7 +87,7 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
                       providers:
                         keycloak:
-                          # Same values as the x-auth-env anchor in docker-compose.yml (Envoy
+                          # Same values as the x-auth-env anchor in compose/apps.yml (Envoy
                           # can't read compose env). Change both together.
                           issuer: https://auth.localhost/realms/media
                           remote_jwks:
@@ -196,8 +196,8 @@ static_resources:
                         # CORS for the replies Envoy makes itself (jwt_authn 401, rate-limit 429).
                         # Without them the browser hides the status from JS: "Failed to fetch".
                         # ADD_IF_ABSENT: on upstream responses the service's own CORS headers win;
-                        # api and notifier stay the owners of CORS. Origin = x-web-origin in
-                        # docker-compose.yml (Envoy can't read compose env): change both.
+                        # api and notifier stay the owners of CORS. Origin = WEB_ORIGIN in
+                        # compose/env/web-origin.env (Envoy can't read compose env): change both.
                         - header: { key: Access-Control-Allow-Origin, value: https://app.localhost }
                           append_action: ADD_IF_ABSENT
                         - header: { key: Access-Control-Expose-Headers, value: Retry-After }

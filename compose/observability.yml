@@ -1,0 +1,14 @@
+# Part of the stack; included by ../docker-compose.yml (networks and volumes are defined there).
+
+services:
+  # Tracing/logs backend: OTel collector + Tempo + Loki + Prometheus + Grafana in one image
+  # (~1 GB RAM). Always on, so a trace exists when a bug happens, not only after we start
+  # looking. Grafana (anonymous admin) is loopback-only, like kafka-ui: http://127.0.0.1:3000.
+  # No volume: recreating the container drops old telemetry, fine for a lab.
+  # Nothing depends_on it on purpose: telemetry must never block the app from starting.
+  lgtm:
+    image: grafana/otel-lgtm:0.34.0
+    networks: [data]
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped

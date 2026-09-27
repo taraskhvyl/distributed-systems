@@ -37,7 +37,7 @@ This looks like duplicated work. It is deliberate: the two checks do different j
 - Latency cost is negligible: 140 keep-alive GETs with `jwt_authn` on vs off, p50 13.8 vs
   14.1–15.4 ms, within noise. A signature check against a cached key takes microseconds;
   fetching keys is the expensive part, and both sides cache them.
-- Issuer and JWKS URL live in two places (`envoy.yaml` and the `x-auth-env` compose anchor;
+- Issuer and JWKS URL live in two places (`envoy.yaml` and the `x-auth-env` anchor in `compose/apps.yml`;
   Envoy can't read compose env). Both sites carry a "change both" comment.
 - Two independent key caches (10 min each). A Keycloak key rotation must publish the new
   key before signing with it, or one side rejects tokens the other accepts.

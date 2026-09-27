@@ -1,0 +1,38 @@
+# Part of the stack; included by ../docker-compose.yml (networks and volumes are defined there).
+# Opt-in tooling (profiles): never part of `make up`.
+
+services:
+  # Opt-in dashboard (profile `tools`): `make kafka-ui` → http://127.0.0.1:8080.
+  # On the data network only and bound to loopback, NOT routed through the gateway: a Kafka
+  # admin UI can read every message, so it must never be reachable from outside this machine.
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    profiles: [tools]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [data]
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: mediashare
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_READONLY: "true" # browse only: no producing, no deleting topics
+
+  # Load generator (opt-in: make loadtest). Talks only to the gateway, like an outside
+  # client: TLS, routing and the per-user token bucket are in the path. Its own network
+  # gives it its own IP, which is exempt from the per-IP limit (it stands in for many
+  # clients). Not on edge/data: it must not see anything a real client couldn't.
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [loadtest]
+    networks: [loadtest]
+    volumes:
+      - ./tools/loadtest:/scripts:ro
+      - ./tools/demo/samples:/samples:ro
+    environment:
+      VUS: ${VUS:-20}
+      LOADTEST_USERS: ${LOADTEST_USERS:-50}
+      # setup() creates the loadtest users through Keycloak's admin API (idempotent).
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+    command: ["run", "/scripts/baseline.js"]

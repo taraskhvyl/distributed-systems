@@ -130,10 +130,10 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
 - `infra/postgres/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need
   `make reset` (or a manual `ALTER` on a running db).
 - `lgtm` (`grafana/otel-lgtm`): OTLP backend for traces (Tempo) and logs (Loki), on `data`.
-  Tracing is zero-code, configured by the `x-otel-env` / `x-node-otel-env` compose anchors.
+  Tracing is zero-code, configured by the `x-otel-env` / `x-node-otel-env` anchors in `compose/apps.yml`.
   How context crosses each hop: `docs/ARCHITECTURE.md` "Tracing".
 - Kafka topics: `file-events` (3 partitions), `file-events-retry`, `file-events-dlq`.
-  Auto-create is off; topics are made by `kafka-init` in `docker-compose.yml`.
+  Auto-create is off; topics are made by `kafka-init` in `compose/data.yml`.
 
 ## Gotchas
 
@@ -147,8 +147,11 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
 - curl resolves every `*.localhost` to loopback itself (RFC 6761), ignoring Docker DNS.
   Inside the `loadtest` network use `curl --resolve host:443:<gateway ip>`.
   api and notifier are on both networks (the notifier serves SSE to the browser).
-- Shared compose values live in `x-` anchors at the top of `docker-compose.yml`
-  (`x-web-origin`, `x-auth-env`). Reference them; don't repeat the literals.
+- Compose is split by tier: `docker-compose.yml` is the map (networks, volumes, `include:`),
+  services live in `compose/{data,edge,apps,observability,tools}.yml`. Each include has
+  `project_directory: .`, so every path (`./infra/...`, `env_file`) is relative to the repo root.
+  YAML anchors (`x-auth-env`, `x-otel-env`) only work inside one file (`compose/apps.yml`);
+  a value shared across files goes in `compose/env/*.env` (e.g. `WEB_ORIGIN`). Don't repeat literals.
 - Tracing: auto-propagation stops at stored data. A new event path that goes through a DB
   row or an open stream must carry `traceparent` by hand (see the outbox column).
   - Node services are ESM: `NODE_OPTIONS` must keep the `--experimental-loader` hook, or

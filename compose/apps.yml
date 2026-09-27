@@ -1,0 +1,128 @@
+# Part of the stack; included by ../docker-compose.yml (networks and volumes are defined there).
+# Our own services (apps/).
+
+# Shared values, defined once and referenced below (YAML anchors; they work within one file).
+# WEB_ORIGIN is shared with compose/data.yml, so it lives in compose/env/web-origin.env instead.
+
+# Token verification settings for every service that checks Keycloak JWTs.
+# The gateway's jwt_authn repeats issuer + JWKS URL (infra/gateway/envoy.yaml): change both.
+x-auth-env: &auth-env
+  AUTH_ISSUER: https://auth.localhost/realms/media
+  AUTH_JWKS_URL: http://keycloak:8080/realms/media/protocol/openid-connect/certs
+
+# OpenTelemetry, zero-code: the SDK reads everything from env. Each service adds its own
+# OTEL_SERVICE_NAME. If lgtm is down, the SDK drops spans; the app keeps working.
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+
+# Node services: the ESM loader hook must be registered before the app imports pg/kafkajs,
+# or the ESM `import` bypasses the patching (require hooks only see CommonJS `require`).
+x-node-otel-env: &node-otel-env
+  <<: *otel-env
+  NODE_OPTIONS: >-
+    --experimental-loader=@opentelemetry/instrumentation/hook.mjs
+    --import=@opentelemetry/auto-instrumentations-node/register
+  # Only what we use; the default set also traces fs/dns/net and floods every trace.
+  OTEL_NODE_ENABLED_INSTRUMENTATIONS: http,pg,ioredis,kafkajs,pino
+  # Skip cloud detectors (GCP/AWS): they probe metadata endpoints and warn on every start.
+  OTEL_NODE_RESOURCE_DETECTORS: env,host,os
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/node.Dockerfile
+      args: { SERVICE: api }
+    networks: [edge, data]
+    env_file: [compose/env/web-origin.env]
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgres://api_user:${API_DB_PASSWORD:?}@postgres:5432/mediashare
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379
+      KAFKA_BROKERS: kafka:9092
+      # One merge key per mapping in YAML, so both anchors go in one list.
+      <<: [*auth-env, *node-otel-env]
+      S3_ENDPOINT_INTERNAL: http://storage:8333
+      S3_ENDPOINT_PUBLIC: https://s3.localhost
+      S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?}
+      S3_SECRET_KEY: ${S3_API_SECRET_KEY:?}
+      S3_UPLOADS_BUCKET: media-uploads
+      S3_THUMBNAILS_BUCKET: media-thumbnails
+      OTEL_SERVICE_NAME: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  processor:
+    build: ./apps/processor
+    networks: [data]
+    environment:
+      DATABASE_URL: postgres://processor_user:${PROCESSOR_DB_PASSWORD:?}@postgres:5432/mediashare
+      KAFKA_BROKERS: kafka:9092
+      S3_ENDPOINT: http://storage:8333
+      S3_ACCESS_KEY: ${S3_PROCESSOR_ACCESS_KEY:?}
+      S3_SECRET_KEY: ${S3_PROCESSOR_SECRET_KEY:?}
+      S3_UPLOADS_BUCKET: media-uploads
+      S3_THUMBNAILS_BUCKET: media-thumbnails
+      TOPIC_MAIN: file-events
+      TOPIC_RETRY: file-events-retry
+      TOPIC_DLQ: file-events-dlq
+      <<: *otel-env
+      OTEL_SERVICE_NAME: processor
+      # Adds otelTraceID/otelSpanID to every LogRecord (read by log.JsonFormatter).
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      storage:
+        condition: service_healthy
+    restart: unless-stopped
+
+  notifier:
+    build:
+      context: .
+      dockerfile: apps/node.Dockerfile
+      args: { SERVICE: notifier }
+    # edge: serves the browser's SSE stream via the gateway and fetches Keycloak's JWKS.
+    # This makes the notifier internet-facing (see docs/SECURITY.md).
+    networks: [edge, data]
+    env_file: [compose/env/web-origin.env]
+    environment:
+      PORT: "3001"
+      <<: [*auth-env, *node-otel-env]
+      KAFKA_BROKERS: kafka:9092
+      TOPIC_MAIN: file-events
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      OTEL_SERVICE_NAME: notifier
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
