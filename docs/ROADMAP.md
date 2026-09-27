@@ -143,7 +143,13 @@ Follow-ups found in 2 (not scheduled):
 ## Phase 3 — Scaling (under load)
 
 - [ ] **k6 script** replaying upload + feed + like flows; baseline on 1 replica. Where is the first bottleneck?
-  - Prediction: _
+  - Prediction: _the api's Postgres pool (`max: 10`)._
+  - Run 1 (`make loadtest`, 20 VUs, 2 users, one IP): **wrong, never reached Postgres.**
+    61% of 1,987 requests got 429: nginx per-IP 995, Redis per-user bucket 214. Pool at most
+    5/10 connections, all idle; api CPU ≤ 25%; successful p95 24 ms. A single-source test
+    measures the throttles, not capacity.
+    Side find: Fastify's own 4xx (empty JSON body) were answered 500; fixed.
+  - Run 2: load generator allowlisted at nginx (`geo`), 50 test users. Prediction: _
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
   - Prediction: _
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
