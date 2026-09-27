@@ -96,8 +96,12 @@ lives in ARCHITECTURE "Tracing" and SECURITY "Trace context from clients").
     `traceparent` but exports no spans of its own (would need a public OTLP endpoint).
   - Toast: confirmed side by side (alice + demo in incognito). It was easy to miss, so it
     moved top-right in the accent colour and stays 8 s.
-- [ ] `trace_id` in every log line (pino + `JsonFormatter`); jump trace → logs in Grafana
-  - `trace_id` done in all three services. Open: verify the Tempo → Loki jump in Grafana.
+- [x] `trace_id` in every log line (pino + `JsonFormatter`); jump trace → logs in Grafana
+  - `trace_id` done in all three services.
+  - Outcome: "Related logs" on the `PUT` span shows the api's log lines only. The lgtm
+    provisioning scopes the query to the clicked span's service:
+    `{service_name="<span service>"} | trace_id = "<id>"`. All services at once:
+    `{service_name=~".+"} | trace_id = "<id>"` in Explore → Loki.
 - [x] nginx passes through `traceparent`
   - Browser starts the trace (`web/js/trace.js`). Prediction (sending it without a CORS change): like fails.
   - Outcome: correct. The preflight still returns 204, but `Access-Control-Allow-Headers` lacks
