@@ -194,6 +194,11 @@ Follow-ups found in 2 (not scheduled):
     Two stages needed: per-IP before `jwt_authn`, per-user after (it reads `sub` from
     `payload_in_metadata`). Edge 429s had no `Retry-After`; `local_reply_config` adds `1`.
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
+  - Now a knob: `API_REPLICAS` (default 1, `compose/apps.yml`). Prediction: skipped.
+  - [x] 3 replicas, `make demo`: Envoy (STRICT_DNS) round-robins, 14 / 14 / 15 api requests
+    per replica. Outbox: 4 events, each exactly once in `file-events`, spread over the
+    relays (1 / 2 / 1). Small sample; the load run is still open.
+  - [ ] Under load (k6): where does the bottleneck move? Kill a replica mid-publish (at-least-once).
   - Prediction: _
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
   - Prediction: _

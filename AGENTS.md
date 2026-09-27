@@ -69,6 +69,7 @@ docker compose up -d --build <service>   # rebuild one service after a code chan
 docker compose up -d --build web         # after any apps/web change (Vite build inside the image)
 pnpm --filter web build                  # fast local typecheck + bundle, no Docker
 docker compose restart ratelimit         # after editing infra/ratelimit/config.yaml (no file watch)
+API_REPLICAS=3 docker compose up -d api  # 3 api replicas (default 1; or set it in .env)
 docker compose exec postgres psql -U api_user -d mediashare
 ```
 
@@ -169,6 +170,8 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   (it once resolved `cn` to an unrelated npm package), and drop `next-themes`/`"use client"`.
 - CSP silently drops injected `<style>` tags and the console often doesn't show it. Check
   `[...document.querySelectorAll('style')].map(s => s.sheet)`: `null` = blocked.
+- With several api replicas, `docker compose exec api` runs in replica 1 only and
+  `docker compose logs api` interleaves all of them (prefix `api-N`).
 - Browser/ad-hoc tests as `alice`/`demo` change state that `make demo` asserts on
   (follows, likes, visibility). Undo it afterwards.
 - Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS). Keep them in sync with the code.

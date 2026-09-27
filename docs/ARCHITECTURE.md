@@ -255,7 +255,8 @@ cloud ones is configuration, not code.
 ## Scaling notes
 
 - **api** is stateless (JWT validation is local; no server-side session) → horizontal scale
-  behind the gateway. First things to watch: postgres connection pool (`max: 10` per pod)
+  behind the gateway: `API_REPLICAS=3` (default 1); Envoy finds replicas via Docker DNS and
+  round-robins. First things to watch: postgres connection pool (`max: 10` per pod)
   and JWKS cache hit rate.
 - **processor/notifier** scale to partition count, not beyond (3 here). More partitions =
   more parallelism, but per-file ordering only holds while the key-based mapping is stable.
