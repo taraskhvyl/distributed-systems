@@ -106,7 +106,8 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   `pnpm --filter <service> add <pkg>`, then commit `pnpm-lock.yaml` (the image build uses
   `--frozen-lockfile` and fails on a stale lockfile).
 - `apps/web/`: static browser app (`app.localhost`), native ES modules in `apps/web/js/`, no build step.
-- `infra/gateway/envoy.yaml`: Envoy edge. TLS, host routing, security headers/CSP, per-IP
+- `infra/gateway/envoy.yaml`: Envoy edge. TLS, host routing, security headers/CSP, JWT check
+  for `api.localhost` (`jwt_authn`; services verify again), per-IP
   limits through the `ratelimit` service (`infra/ratelimit/config.yaml`, counters in Redis).
   `web` (stock nginx) serves `apps/web`; Envoy doesn't serve files.
 - `infra/postgres/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need

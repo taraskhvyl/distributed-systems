@@ -1,6 +1,5 @@
 # Edge gateway: TLS, host routing, security headers, per-IP rate limits (via the global
-# rate-limit service, infra/ratelimit/config.yaml). Parity with the former nginx config;
-# JWT validation at the edge comes next (docs/ROADMAP.md, Phase 3).
+# rate-limit service, infra/ratelimit/config.yaml), Keycloak JWT validation for the api host.
 #
 # nginx → Envoy vocabulary: server_name/location = virtual_hosts/routes,
 # upstream = cluster, add_header = response_headers_to_add, limit_req = rate_limits.
@@ -51,6 +50,8 @@ static_resources:
                           upstream: "%UPSTREAM_HOST%"
                           rt_ms: "%DURATION%"
                           flags: "%RESPONSE_FLAGS%"
+                          # Why Envoy answered itself, e.g. jwt_authn_access_denied{Jwt_is_missing}.
+                          details: "%RESPONSE_CODE_DETAILS%"
                 http_filters:
                   - name: envoy.filters.http.ratelimit
                     typed_config:
@@ -63,6 +64,36 @@ static_resources:
                       rate_limit_service:
                         transport_api_version: V3
                         grpc_service: { envoy_grpc: { cluster_name: ratelimit } }
+                  # Validates Keycloak access tokens at the edge: a missing or bad token gets
+                  # its 401 here and never reaches a service. After the per-IP limit on
+                  # purpose: a flood of junk tokens is capped before we pay for signature checks.
+                  # Off by default; only hosts that opt in (typed_per_filter_config) require it.
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      providers:
+                        keycloak:
+                          # Same values as the x-auth-env anchor in docker-compose.yml (Envoy
+                          # can't read compose env). Change both together.
+                          issuer: https://auth.localhost/realms/media
+                          remote_jwks:
+                            http_uri:
+                              uri: http://keycloak:8080/realms/media/protocol/openid-connect/certs
+                              cluster: keycloak
+                              timeout: 1s
+                            # Like the services' JWKS cache: keys are fetched once, not per request.
+                            # async_fetch loads them at startup, so the first request isn't slowed.
+                            cache_duration: 600s
+                            async_fetch: {}
+                          clock_skew_seconds: 5
+                          # Keep the Authorization header: the services verify the token too
+                          # (defense in depth, docs/adr/0003-jwt-verified-at-edge-and-in-services.md).
+                          forward: true
+                      requirement_map:
+                        keycloak: { provider_name: keycloak }
+                      # A CORS preflight never carries the token (it asks whether sending one is
+                      # allowed); 401'ing it would break every browser call.
+                      bypass_cors_preflight: true
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -125,7 +156,21 @@ static_resources:
 
                     - name: api
                       domains: [api.localhost, "api.localhost:443"]
+                      # Every api route, /v1/events included, needs a valid Keycloak token.
+                      typed_per_filter_config:
+                        envoy.filters.http.jwt_authn:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.PerRouteConfig
+                          requirement_name: keycloak
                       response_headers_to_add:
+                        # CORS for the replies Envoy makes itself (jwt_authn 401, rate-limit 429).
+                        # Without them the browser hides the status from JS: "Failed to fetch".
+                        # ADD_IF_ABSENT: on upstream responses the service's own CORS headers win;
+                        # api and notifier stay the owners of CORS. Origin = x-web-origin in
+                        # docker-compose.yml (Envoy can't read compose env): change both.
+                        - header: { key: Access-Control-Allow-Origin, value: https://app.localhost }
+                          append_action: ADD_IF_ABSENT
+                        - header: { key: Access-Control-Expose-Headers, value: Retry-After }
+                          append_action: ADD_IF_ABSENT
                         - &frame-deny
                           header: { key: X-Frame-Options, value: DENY }
                           append_action: OVERWRITE_IF_EXISTS_OR_ADD

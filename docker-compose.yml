@@ -1,9 +1,11 @@
 name: mediashare
 
 # Shared values, defined once and referenced below (YAML anchors).
+# Repeated in infra/gateway/envoy.yaml (CSP, CORS on edge replies): change both.
 x-web-origin: &web-origin https://app.localhost
 
 # Token verification settings for every service that checks Keycloak JWTs.
+# The gateway's jwt_authn repeats issuer + JWKS URL (infra/gateway/envoy.yaml): change both.
 x-auth-env: &auth-env
   AUTH_ISSUER: https://auth.localhost/realms/media
   AUTH_JWKS_URL: http://keycloak:8080/realms/media/protocol/openid-connect/certs

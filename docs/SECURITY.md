@@ -7,7 +7,7 @@ Each entry names the threat, the control, and the accepted trade-off.
 
 | threat                          | control                                                                 |
 |---------------------------------|-------------------------------------------------------------------------|
-| Spoofing                        | OIDC JWTs signed by Keycloak, verified locally via JWKS (`apps/api/src/http/auth.ts`) |
+| Spoofing                        | OIDC JWTs signed by Keycloak, verified via cached JWKS at the edge (`jwt_authn`, `infra/gateway/envoy.yaml`) and again in each service (`packages/auth`) |
 | Tampering                       | TLS at the edge; SigV4-signed presigned URLs (method, path, host, expiry); sha256 checksum recorded at processing time |
 | Repudiation                     | structured JSON logs with `eventId` correlation across api/processor/notifier |
 | Information disclosure          | private uploads bucket + short-TTL presigned GETs; 404 (not 403) for other users' files; log redaction of `Authorization` |

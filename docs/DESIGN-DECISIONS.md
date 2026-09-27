@@ -143,6 +143,24 @@ CLI demo uses the password grant while the browser app uses auth-code + PKCE (ne
 answer), and why logout/revocation is JWTs' weak spot (short TTL + refresh rotation is
 the standard answer).
 
+## Q: The gateway validates JWTs. Why do the services validate them again?
+
+**A:** Because the two checks do different jobs. The edge (Envoy `jwt_authn`) is a
+**filter**: bad tokens get a 401 before they take a thread, a DB connection or an SSE
+stream, and the edge gets a verified `sub` to rate-limit by. The service check is the
+**guarantee**: identity comes only from a signature the service checked itself. "Trust the
+edge" breaks in three ways: a neighbour on the same network calls `api:3000` directly and
+bypasses Envoy; a new route in Envoy is added without the JWT requirement; a compromised
+gateway sets any `sub` it likes. A dedicated network only fixes the first. The cost of
+checking twice was measured: within noise (p50 ~14 ms either way), because verifying against
+a cached key takes microseconds. The real cost is keeping two configs in sync (issuer, JWKS
+URL, clock skew) and two key caches across a key rotation. Details:
+`docs/adr/0003-jwt-verified-at-edge-and-in-services.md`.
+
+See it: `curl -sk -H 'Authorization: Bearer x.y.z' https://api.localhost/v1/files`, then
+`docker compose logs gateway | grep 401`. The line shows `upstream: null` and
+`details: jwt_authn_access_denied{…}`; the api logs nothing.
+
 ## Q: What is PKCE and why does a browser app need it?
 
 **A:** A browser app is a **public client**: anything shipped to the browser is readable,
@@ -375,7 +393,10 @@ limit, which also covered the web app's static files. One login (Keycloak pages,
 modules, token, files, feed) drained the bucket, and Docker Desktop makes every local
 client the same IP. **A gateway 429 has no CORS headers, so the browser hides it from JS**:
 a rate limit looks like a network error. Fixes: no per-IP limit on static files (nothing
-upstream to protect), and no duplicate refetch on the first SSE connect. Per-IP limits
+upstream to protect), and no duplicate refetch on the first SSE connect. The same trap came
+back with the edge JWT check (a 401 without CORS headers). The fix for the whole class: the
+api host in `envoy.yaml` adds `Access-Control-Allow-Origin` / `-Expose-Headers: Retry-After`
+with `ADD_IF_ABSENT`, so Envoy's own replies are readable and the services still own CORS. Per-IP limits
 also hurt real users behind one NAT (offices, mobile carriers); that's why the per-user
 Redis layer exists.
 

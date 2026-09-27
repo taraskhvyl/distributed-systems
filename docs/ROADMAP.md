@@ -167,9 +167,20 @@ Follow-ups found in 2 (not scheduled):
     never reach a service); per-user limit keyed on the JWT `sub` at the edge; timeouts,
     retries, outlier detection per upstream; Envoy emits its own spans (the edge shows up in
     Tempo).
-  - ADR: keep JWT checks in the services too (defense in depth) or trust the edge?
+  - [x] ADR: keep JWT checks in the services too (defense in depth) or trust the edge?
+    → both (`docs/adr/0003-jwt-verified-at-edge-and-in-services.md`).
   - Prediction: _a bad token gets its 401 from Envoy and the api sees nothing; valid
     requests get slower (the token is checked at the edge and again in the service)._
+  - [x] `jwt_authn` on the api host (incl. `/v1/events`), JWKS from `keycloak:8080` cached
+    10 min, `bypass_cors_preflight`, `forward: true` (services still verify). Outcome: first
+    half **confirmed**: bad/missing tokens get 401 with `upstream: null` and a reason in the
+    new `details` log field (`jwt_authn_access_denied{Jwt_is_missing}`); the api logged 0 of
+    them. Second half **refuted**: 140 keep-alive GETs, on vs off, p50 13.8 vs 14.1–15.4 ms,
+    inside noise. An RS256 check against a cached key is microseconds; the cost of JWT auth
+    is fetching keys, not verifying. Side find: the edge's 401 has **no CORS headers**, so the
+    browser sees "Failed to fetch" instead of a readable 401 (the api's own 401 had them).
+    Fixed at the class level: the api host adds CORS headers `ADD_IF_ABSENT`, so every reply
+    Envoy makes itself (401, 429) is readable and the services stay the owners of CORS.
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
   - Prediction: _
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.

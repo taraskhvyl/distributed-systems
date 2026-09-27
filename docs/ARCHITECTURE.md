@@ -49,7 +49,7 @@ Network rules (enforced by Docker, mirroring VPC subnets + security groups):
 | container  | edge | data | can be reached by              | can reach                       |
 |------------|------|------|--------------------------------|---------------------------------|
 | gateway    | ✔    | ✖    | internet (host :443 only)      | api, notifier, keycloak, storage |
-| keycloak   | ✔    | ✖    | gateway, api, notifier (JWKS)  | (nothing it needs)              |
+| keycloak   | ✔    | ✖    | gateway (proxy + JWKS), api, notifier (JWKS) | (nothing it needs)              |
 | api        | ✔    | ✔    | gateway (public), internal     | keycloak, postgres, redis, kafka, storage |
 | storage    | ✔    | ✔    | gateway (S3 endpoint), internal| (nothing it needs)              |
 | postgres   | ✖    | ✔    | api, processor                 | —                               |
@@ -81,6 +81,7 @@ sequenceDiagram
   C->>K: POST /realms/media/token
   K-->>C: access token (JWT)
   C->>A: POST /v1/files {meta}
+  Note over C,A: gateway verifies the JWT first (jwt_authn); bad tokens stop there
   A->>A: verify JWT locally (JWKS)
   A->>P: INSERT files (status = pending)
   A-->>C: {id, presigned PUT url}
