@@ -121,7 +121,15 @@ Experiments:
     `web/js/live-events.js`) brought her back 26 s later. No toast; the like count was right
     (resync on reconnect). Kafka → notifier is at-least-once, notifier → browser at-most-once.
     Fix if needed: a durable notifications inbox fetched on reconnect (+ `Last-Event-ID`).
-- [ ] A processor failure → retry topic: does the retry continue the same trace?
+- [x] A processor failure → retry topic: does the retry continue the same trace?
+  - Setup: pause processor, `complete`, stop storage, unpause; storage back after ~34 s.
+  - Prediction: _separate traces; the file becomes ready once storage is back._ **Both wrong.**
+  - Outcome: **one trace** (`complete` → 3× `handle file.uploaded` → `file-events-dlq send`
+    → `handle file.failed`): the retry is produced inside the `handle` span, so its Kafka
+    header carries the context. The file ended **failed in the DLQ** after 13 s, while storage
+    was down 34 s: retries have no delay, so a transient outage burns all attempts (each
+    ~4.5 s only from botocore's own connect retries). Nothing recovers it afterwards.
+    → Phase 4 "Retry backoff" (delayed retry topics + DLQ replay).
 
 Follow-ups found in 2 (not scheduled):
 - Each consumed message still leaves a tiny orphan `recv` trace from the processor's
