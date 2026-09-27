@@ -149,7 +149,22 @@ Follow-ups found in 2 (not scheduled):
     5/10 connections, all idle; api CPU ≤ 25%; successful p95 24 ms. A single-source test
     measures the throttles, not capacity.
     Side find: Fastify's own 4xx (empty JSON body) were answered 500; fixed.
-  - Run 2: load generator allowlisted at nginx (`geo`), 50 test users. Prediction: _
+  - Run 2 (after the gateway swap below, so it measures the new edge): load generator
+    exempt from per-IP limits, 50 test users (`setup()` creates them). Prediction: _
+- [ ] **Swap the gateway: nginx → Envoy.** Question: what does a real API gateway add over a
+  reverse proxy, and what does it cost?
+  - Parity first (`make demo` must pass): TLS, host routing (app/api/auth/s3), SSE without
+    buffering and with long timeouts, security headers/CSP, `traceparent` passthrough.
+    Envoy doesn't serve files: `apps/web` needs a small static server behind it.
+  - Per-IP limit: Envoy's `local_ratelimit` is one bucket per route, not per client. Per-IP
+    (and the load-generator exemption) needs the global rate-limit service
+    (`envoyproxy/ratelimit` + Redis): local vs global limiting.
+  - Then the gateway features: `jwt_authn` validates Keycloak JWTs at the edge (bad tokens
+    never reach a service); per-user limit keyed on the JWT `sub` at the edge; timeouts,
+    retries, outlier detection per upstream; Envoy emits its own spans (the edge shows up in
+    Tempo).
+  - ADR: keep JWT checks in the services too (defense in depth) or trust the edge?
+  - Prediction: _
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
   - Prediction: _
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
