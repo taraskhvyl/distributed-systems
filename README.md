@@ -204,7 +204,7 @@ docker compose logs -f notifier | grep sse                     # SSE streams ope
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — components, data flows, topics, state machine
 - [docs/SECURITY.md](docs/SECURITY.md) — threat model and every control, with trade-offs
 - [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) — Q&A walkthrough of every design decision, mapped to concrete code paths
-- [docs/ROADMAP.md](docs/ROADMAP.md) — learning roadmap: interactive UI → tracing → scaling → failure injection → advanced topics
+- [docs/ROADMAP.md](docs/ROADMAP.md) — learning roadmap: interactive UI → tracing → scaling → failure injection → advanced topics → deploy
 - [docs/adr/](docs/adr/) — decisions that are hard to reverse or surprising (leases, users read model, JWT at edge + services, web build step)
 - [CONTEXT.md](CONTEXT.md) — domain glossary (File, Published file, Feed, Lease…)
 

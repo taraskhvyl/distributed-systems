@@ -252,3 +252,23 @@ Pick in any order; suggested: d → a → e → c.
   `@confluentinc/kafka-javascript` in the api relay and notifier
 
 Out of scope: multipart uploads (the feed already uses keyset pagination). They're API design, not distributed systems.
+
+## Phase 6 — Deploy to a server
+
+One VPS with Docker Compose (8 GB RAM: Kafka + Keycloak + lgtm take ~3–4 GB). Question: what
+in a "works on my laptop" stack is really configuration, and what is hidden dev-only state?
+
+- [ ] **Domain as one variable**: `DOMAIN` replaces the hardcoded `*.localhost` (~12 config
+  files). Envoy can't read env, so `envoy.yaml` is rendered from a template (`envsubst`); the
+  web app gets its URLs at build time (`VITE_*`). Removes the "change both" comments.
+- [ ] **Keycloak in production mode**: `start` instead of `start-dev`, data in Postgres (today
+  it's lost when the container is recreated), no seeded users with known passwords.
+- [ ] **Real TLS**: Let's Encrypt (certbot + gateway reload, or a wildcard via DNS challenge);
+  Envoy has no ACME client. Port 80 only for the challenge and the HTTPS redirect.
+- [ ] **Secrets and access**: fresh `.env` values; Grafana and kafka-ui stay on loopback,
+  reached through an SSH tunnel.
+- [ ] **Backups**: `pg_dump` + the `weeddata` volume on a schedule; one restore drill.
+- [ ] **Deploy path**: `git pull && make up` first; then images built in GitHub Actions and
+  pulled from a registry (the server stops compiling).
+
+Out of scope: Kubernetes and managed services (MSK, RDS, S3). Phase 5c covers k8s locally.
