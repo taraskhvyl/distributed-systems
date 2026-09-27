@@ -2,7 +2,7 @@
 // Buttons only report clicks; main.js calls the api and re-renders from the server's answer.
 
 const BYTES_PER_KB = 1024
-const TOAST_VISIBLE_MS = 5000
+const TOAST_VISIBLE_MS = 8000
 
 const byId = (id) => document.getElementById(id)
 

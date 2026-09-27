@@ -132,7 +132,8 @@ tr:last-child td { border-bottom: none; }
 .log-panel summary { cursor: pointer; font-size: .85rem; }
 #log { margin-top: .5rem; padding: .6rem; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; max-height: 14rem; overflow: auto; }
 
-.toasts { position: fixed; right: 1rem; bottom: 1rem; display: flex; flex-direction: column; gap: .5rem; z-index: 10; }
-.toast { background: var(--text); color: var(--bg); padding: .65rem 1rem; border-radius: 8px; box-shadow: var(--shadow); max-width: 320px; animation: toast-in .2s ease-out; }
-@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+/* Top-right in the accent colour: live events are rare, so they should interrupt the eye. */
+.toasts { position: fixed; top: 1rem; right: 1rem; display: flex; flex-direction: column; gap: .5rem; z-index: 10; }
+.toast { background: var(--accent); color: var(--accent-text); padding: .9rem 1.2rem; border-radius: var(--radius); box-shadow: 0 8px 24px rgb(0 0 0 / 25%); max-width: 360px; font-weight: 600; animation: toast-in .25s ease-out; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-12px); } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
