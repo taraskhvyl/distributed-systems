@@ -66,6 +66,9 @@ docker compose exec -T lgtm curl -s localhost:3200/api/traces/<traceId>   # full
 make down    # stop, keep data
 make reset   # stop + wipe volumes (needed after editing infra/postgres/init/*)
 docker compose up -d --build <service>   # rebuild one service after a code change
+docker compose up -d --build web         # after any apps/web change (Vite build inside the image)
+pnpm --filter web build                  # fast local typecheck + bundle, no Docker
+docker compose restart ratelimit         # after editing infra/ratelimit/config.yaml (no file watch)
 docker compose exec postgres psql -U api_user -d mediashare
 ```
 
@@ -154,6 +157,17 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
     browser drops the request ("Failed to fetch") while the api logs nothing.
   - Processor logging: `log.setup()` keeps OTel's `LoggingHandler`; don't `handlers.clear()`.
   - Tempo search via `curl` to `lgtm:3200` with `start`/`end` misbehaved; search without them.
+- Envoy's own replies (jwt_authn 401, rate-limit 429) show `flags: -` or `RL`; the reason is
+  in the access log's `details` field. On the api host they get CORS + `Retry-After` from
+  `envoy.yaml`; a new host needs the same, or the browser sees "Failed to fetch".
+- Per-user limits read the JWT `sub`, so they must be a `stage: 1` rate limit (after
+  `jwt_authn`); stage 0 runs before the token is verified.
+- shadcn CLI (`cd apps/web && pnpm dlx shadcn@latest add <component>`): check its imports
+  (it once resolved `cn` to an unrelated npm package), and drop `next-themes`/`"use client"`.
+- CSP silently drops injected `<style>` tags and the console often doesn't show it. Check
+  `[...document.querySelectorAll('style')].map(s => s.sheet)`: `null` = blocked.
+- Browser/ad-hoc tests as `alice`/`demo` change state that `make demo` asserts on
+  (follows, likes, visibility). Undo it afterwards.
 - Docs live in `docs/` (ARCHITECTURE, SECURITY, DESIGN-DECISIONS). Keep them in sync with the code.
 - `CONTEXT.md` is the domain glossary (File, Published file, Feed, Lease…). Use its terms;
   update it when a term is settled.
