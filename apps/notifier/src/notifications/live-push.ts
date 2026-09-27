@@ -1,5 +1,5 @@
 import type { EnvelopeHandler } from '../events.js'
-import type { PublishSse } from '../redis/publisher.js'
+import type { PublishLiveEvent } from '../redis/publisher.js'
 import { describeEvent } from './messages.js'
 
 /**
@@ -7,7 +7,7 @@ import { describeEvent } from './messages.js'
  * At-most-once: if the owner has no tab connected right now, the event is gone (the
  * client resyncs on reconnect).
  */
-export function pushToOwnerStreams(publish: PublishSse): EnvelopeHandler {
+export function pushToOwnerStreams(publish: PublishLiveEvent): EnvelopeHandler {
   return async (envelope) => {
     const ownerId = envelope.payload.ownerId
     if (!ownerId) return

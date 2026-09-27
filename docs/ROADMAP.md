@@ -274,6 +274,10 @@ Follow-ups found in 2 (not scheduled):
     inside sse-gateway: kafka/postgres `ENOTFOUND`, `FLUSHALL`/`GET`/`PUBLISH` → `NOPERM`;
     `make demo` passes; 3 sse-gateway replicas → 20 / 20 / 20; one trace api → notifier →
     Redis → sse-gateway. (The fan-out now lives in `redis/publisher.ts` / `redis/subscriber.ts`.)
+  - The wire contract moved into `packages/live-events` (it had been copied into both
+    services). Renaming a field now fails both builds (5 errors) instead of compiling and
+    silently delivering nothing. Side find: the Dockerfile's `--filter "./apps/x..."` needs
+    braces, `{./apps/x}...`, or it selects only the app and its workspace deps never build.
 - [ ] **Feed at scale**: seed thousands of follows; fan-out-on-read p99 blows up → fan-out on write (`feed-writer` consumer, Redis sorted set per user) → one user with 50k followers spikes lag → hybrid
   - Prediction: _
 - [ ] **Hot key**: hammer likes on one viral file; row-lock contention caps throughput regardless of replicas → sharded counters → Redis `INCR` + periodic flush (exact vs approximate)

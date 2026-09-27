@@ -142,7 +142,8 @@ keeps an SSE stream to `GET /v1/events` (`sse-gateway`,
 publishes each event for its owner to the Redis channel `sse-events`
 (`apps/notifier/src/redis/publisher.ts`); every `sse-gateway` replica subscribes and writes
 it to the streams it holds for that user (`apps/sse-gateway/src/redis/subscriber.ts`), so
-it doesn't matter which replica a tab landed on.
+it doesn't matter which replica a tab landed on. The channel and message format are one
+shared package, `@mediashare/live-events`, so the two sides can't drift apart.
 
 ## Data model (postgres)
 
@@ -236,7 +237,7 @@ How the context crosses each hop:
 | request → relay | `outbox_events.traceparent` column | `insertOutboxEvent` / `publishRow` (by hand) |
 | relay/processor → Kafka → consumer | `traceparent` Kafka header | kafkajs / confluent-kafka instrumentation |
 | Kafka → processor handler | header extracted by hand | `apps/processor/src/kafka_loop.py` (the auto span only *links*) |
-| notifier → sse-gateway | `traceContext` field in the Redis pub/sub message | `redis/publisher.ts` / `redis/subscriber.ts` (by hand) |
+| notifier → sse-gateway | `traceContext` field in the Redis pub/sub message | `encodeLiveEvent` / `decodeLiveEvent` in `packages/live-events` (by hand) |
 | notifier → browser | `traceId` field in the SSE frame | `StreamRegistry.publish` |
 
 Rule of thumb: automatic propagation lives in memory (async context) and stops at any

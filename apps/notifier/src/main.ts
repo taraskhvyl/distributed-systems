@@ -4,16 +4,16 @@ import { startConsumer } from './kafka/consumer.js'
 import { logger } from './log.js'
 import { pushToOwnerStreams } from './notifications/live-push.js'
 import { sendNotification } from './notifications/webhook.js'
-import { createSsePublisher } from './redis/publisher.js'
+import { createLiveEventPublisher } from './redis/publisher.js'
 
 // Composition root: builds the parts and connects them. No logic of its own.
 async function main() {
   // enableOfflineQueue: false fails fast while Redis is down, so a Kafka handler never
   // hangs on it. enableReadyCheck: false because the ready check runs INFO, which this
-  // Redis user may not (it may only PUBLISH on the live-events channel).
+  // Redis user may not (it may only PUBLISH on the Live events channel).
   const redis = new Redis(config.redisUrl, { enableOfflineQueue: false, enableReadyCheck: false })
 
-  const consumer = await startConsumer([pushToOwnerStreams(createSsePublisher(redis)), sendNotification])
+  const consumer = await startConsumer([pushToOwnerStreams(createLiveEventPublisher(redis)), sendNotification])
   logger.info({ webhook: Boolean(config.webhookUrl) }, 'notifier started')
 
   const shutdown = async () => {

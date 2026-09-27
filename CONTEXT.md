@@ -22,6 +22,10 @@ again changes nothing. The file's owner is notified of a new Like, not of an unl
 
 **Feed** — the Published files of the users you follow, newest first (by upload time).
 
+**Live event** — an event pushed to a user's open browser tabs while they are connected
+(SSE), e.g. "your file is ready", "alice liked your file". At-most-once: a tab that isn't
+connected misses it and resyncs by reloading. Not stored.
+
 **Claim** — a processor taking exclusive-by-intent ownership of one File's processing.
 
 **Lease** — a Claim that expires. An expired Claim may be taken over by another processor,

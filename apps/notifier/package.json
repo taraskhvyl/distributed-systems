@@ -14,6 +14,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@mediashare/live-events": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/auto-instrumentations-node": "^0.80.0",
     "@opentelemetry/instrumentation": "^0.222.0",

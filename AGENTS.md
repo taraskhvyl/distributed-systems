@@ -125,8 +125,11 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   `workspace:*`) built by one two-stage `apps/node.Dockerfile` from the repo root
   (build context `.`; `.dockerignore` keeps `.env` and certs out). Adding a dependency:
   `pnpm --filter mediashare-<service> add <pkg>` (the package name; a bare `notifier` matches
-  nothing and pnpm still prints "Done"), then commit `pnpm-lock.yaml` (the image build uses
+  nothing and pnpm still prints "Done"). A new workspace package or app also needs its
+  `package.json` COPY line in `apps/node.Dockerfile`. Then commit `pnpm-lock.yaml` (the image build uses
   `--frozen-lockfile` and fails on a stale lockfile).
+- `packages/live-events`: the notifier ↔ sse-gateway contract (`@mediashare/live-events`):
+  Redis channel, message shape, trace-context encode/decode.
 - `apps/web/`: browser app (`app.localhost`), React + TS + Tailwind + shadcn, built by Vite
   (`apps/web.Dockerfile`: build stage, then nginx serves `dist/`). ADR 0004.
 - `infra/gateway/envoy.yaml`: Envoy edge. TLS, host routing, security headers/CSP, JWT check
