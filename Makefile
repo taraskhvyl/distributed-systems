@@ -1,4 +1,4 @@
-.PHONY: env certs build up down reset logs ps kafka-ui demo clean
+.PHONY: env certs build up down reset logs ps kafka-ui demo loadtest clean
 
 VENV := .venv
 
@@ -35,6 +35,10 @@ ps:
 kafka-ui:
 	docker compose --profile tools up -d --wait kafka-ui
 	@echo "Kafka UI (read-only): http://127.0.0.1:8080"
+
+# Phase 3 load test through the gateway. Peak virtual users: make loadtest VUS=50
+loadtest:
+	VUS=$(or $(VUS),20) docker compose --profile loadtest run --rm k6
 
 demo: $(VENV)/.stamp
 	$(VENV)/bin/python tools/demo/client.py

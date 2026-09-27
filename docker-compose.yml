@@ -318,3 +318,20 @@ services:
       timeout: 5s
       retries: 30
     restart: unless-stopped
+
+  # Load generator (opt-in: make loadtest). Reaches the gateway on the host's :443 via
+  # host-gateway, like an outside client: TLS and every rate limit are in the path.
+  # Not on edge/data on purpose; it must not see anything a real client couldn't.
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [loadtest]
+    extra_hosts:
+      - "api.localhost:host-gateway"
+      - "auth.localhost:host-gateway"
+      - "s3.localhost:host-gateway"
+    volumes:
+      - ./tools/loadtest:/scripts:ro
+      - ./tools/demo/samples:/samples:ro
+    environment:
+      VUS: ${VUS:-20}
+    command: ["run", "/scripts/baseline.js"]

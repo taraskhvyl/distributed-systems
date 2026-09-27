@@ -84,15 +84,18 @@ function registerHealthChecks(app: FastifyInstance) {
 }
 
 /**
- * Expected failures (DomainError, schema validation) become 4xx without an error log;
+ * Expected failures (DomainError, Fastify's 4xx) become 4xx without an error log;
  * anything else is a bug: logged with its stack, answered with an opaque 500.
  */
 function handleError(err: FastifyError, req: FastifyRequest, reply: FastifyReply) {
   if (err instanceof DomainError) {
     return reply.code(STATUS_BY_ERROR_CODE[err.code]).send({ error: { code: err.code, message: err.message } })
   }
-  if (err.validation) {
-    return reply.code(400).send({ error: { code: 'bad_request', message: err.message } })
+  // Fastify's own client errors carry a 4xx statusCode: schema validation, malformed or
+  // empty JSON body, body too large. They are the client's fault, not a bug.
+  const isClientError = err.statusCode !== undefined && err.statusCode >= 400 && err.statusCode < 500
+  if (isClientError) {
+    return reply.code(err.statusCode!).send({ error: { code: 'bad_request', message: err.message } })
   }
   req.log.error({ err }, 'unhandled error')
   return reply.code(500).send({ error: { code: 'internal', message: 'Internal server error' } })
