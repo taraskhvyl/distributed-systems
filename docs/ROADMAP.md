@@ -224,8 +224,26 @@ Follow-ups found in 2 (not scheduled):
   - [x] 3 replicas, `make demo`: Envoy (STRICT_DNS) round-robins, 14 / 14 / 15 api requests
     per replica. Outbox: 4 events, each exactly once in `file-events`, spread over the
     relays (1 / 2 / 1). Small sample; the load run is still open.
-  - [ ] Under load (k6): where does the bottleneck move? Kill a replica mid-publish (at-least-once).
-  - Prediction: _
+  - [x] Under load (k6): where does the bottleneck move? Kill a replica mid-publish (at-least-once).
+  - Prediction: skipped.
+  - Run 4 (Run 3's setup, policy off, 200 VUs, `API_REPLICAS=3`): **worse, not better.**
+    115 req/s (Run 3: 162), p95 2.2–2.6 s (Run 3: 0.9 s), still 0 errors; reproduced twice.
+    The queue is still inside the api (api-side p95 2.09 s ≈ k6's). A slow like's trace:
+    `pg-pool.connect` 2,084 ms + the `SELECT … FOR UPDATE` on the file row 655 ms; the
+    queries themselves took 2 ms. Two walls: (1) **the hot row** — `Lock/tuple` waiters went
+    from 5 to 18–26: 30 connections just line up behind the same row lock, so a serialized
+    resource gets *more* waiters, not more throughput; (2) **the box** — the Docker VM
+    (3 CPUs) at 98–99% busy, `lgtm` (trace ingest) the top consumer at 42–72%, then kafka.
+    Replicas on one host add processes, not CPU. Side find: the first sampling run showed
+    an idle pool and missed both; instantaneous samples lie, a trace doesn't.
+  - Kill (`docker kill` api-2 at ~45% of the run): Envoy sent **88 × 503** to the dead
+    replica before STRICT_DNS dropped it (0.6% of requests); no retry, no outlier
+    detection yet. After the kill, 2 replicas did *better* (142 req/s, p95 1.25 s): less
+    CPU contention and fewer lock waiters. Outbox: 2,808 rows published = 2,808 messages
+    in `file-events`, 0 lost, 0 duplicated. The kill missed the relay's publish→commit
+    window (the relay sends, *then* marks `published_at` in the same txn; a kill in between
+    rolls the mark back and another relay republishes → a duplicate, never a loss). One
+    kill proves "no loss"; the duplicate path is shown by code, not observed.
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
   - Prediction: _
 - [ ] `--scale notifier=3`: SSE events go missing (the partition's consumer isn't the instance holding the connection). Fix with Redis pub/sub fan-out.

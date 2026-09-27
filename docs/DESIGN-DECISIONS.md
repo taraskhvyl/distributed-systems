@@ -424,6 +424,12 @@ ACLs — exactly like real S3.
 
 - **api** — gateway 502s; uploads in flight pause; no state lost (rows + objects are
   durable); restarts and resumes; the outbox relay catches up in one tick.
+  Measured with 3 replicas under load, one `docker kill`ed: Envoy sent 88 requests
+  (0.6%) to the dead replica as 503s until STRICT_DNS dropped it. There is no retry or
+  outlier detection yet. The outbox lost nothing: 2,808 rows = 2,808 Kafka messages. A kill
+  between the relay's send and its `published_at` COMMIT would roll the mark back and
+  another relay would republish it: a duplicate, never a loss. That's why consumers must
+  be idempotent (the processor's CAS claim, see "duplicate events" above).
 - **kafka** — `complete` still works (the event is safely in the outbox table);
   publishing pauses; the relay retries; consumers resume from committed offsets. Nothing
   is lost — the outbox is the buffer.
@@ -448,9 +454,13 @@ What fills the pool is *write transactions*: each holds a connection through a
 fsync-bound COMMIT (`pg_stat_activity`: `IO/WalSync`), and likes on one viral file
 serialize on its `files` row (`Lock/tuple` × 5) — the pool caps concurrency, not db
 capacity, and reads pay for writes' queue time. Saturation showed up as latency
-(median 110 ms, p95 0.9 s), not errors: 0 failed requests. Fix ladder: more replicas
-(3 × 10 conns) → PgBouncer (fixed connections to the db) → sharded counters for the
-hot row. Processor scales to partition count (3), then add partitions. Postgres
+(median 110 ms, p95 0.9 s), not errors: 0 failed requests. Then 3 replicas (3 × 10
+conns) made it **worse**: 115 req/s, p95 2.2 s. The extra connections just queued on the
+same row lock (`Lock/tuple` × 5 → × 26), and all replicas shared one 3-CPU host that
+was already 98% busy (trace ingest the top consumer). Lesson: adding replicas helps only
+when the bottleneck is per-replica. A serialized resource (one hot row) or a shared host
+doesn't scale out. Fix ladder, corrected: sharded counters for the hot row first, then
+replicas on separate hosts, then PgBouncer (fixed connections to the db). Processor scales to partition count (3), then add partitions. Postgres
 read replicas for listing, partition the `outbox` by time if it grows, or move to CDC.
 Thumbnails behind a CDN with `Cache-Control` (public bucket already) — originals are
 presigned and never cached. Storage: SeaweedFS scales by adding volume servers; the S3
