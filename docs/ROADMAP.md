@@ -244,8 +244,19 @@ Follow-ups found in 2 (not scheduled):
     window (the relay sends, *then* marks `published_at` in the same txn; a kill in between
     rolls the mark back and another relay republishes → a duplicate, never a loss). One
     kill proves "no loss"; the duplicate path is shown by code, not observed.
-- [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
-  - Prediction: _
+- [x] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
+  - Prediction: skipped.
+  - Lag metric: lgtm's bundled collector gets an overlay (`infra/lgtm/otelcol-kafka-lag.yaml`,
+    `kafka_metrics` receiver asks the broker every 5 s); dashboard "Kafka consumers"
+    (`infra/lgtm/dashboards/`). The processor logs `partitions assigned/revoked`.
+  - Scale 1 → 4: **confirmed**, processor-4 got `[]`. It subscribes to 2 topics × 3
+    partitions, but `range` assigns per topic, so the 4th gets nothing. The rebalance
+    took 160 ms, and processor-1 first revoked all 6 partitions (eager, stop-the-world).
+  - Kill the owner of `file-events/2` under k6 (50 VUs): its lag rose ~2/s to 61, and p0/p1
+    stayed at 0. At +31 s (`session.timeout.ms` 30 s) the group rebalanced, the idle
+    processor-4 took partition 2, and the lag was 0 five seconds later. 561 files `ready`,
+    none stuck. The idle member is a hot standby: it cuts failover to the detection time,
+    and that time is the session timeout.
 - [ ] `--scale notifier=3`: SSE events go missing (the partition's consumer isn't the instance holding the connection). Fix with Redis pub/sub fan-out.
   - Prediction: _
 - [ ] **Feed at scale**: seed thousands of follows; fan-out-on-read p99 blows up → fan-out on write (`feed-writer` consumer, Redis sorted set per user) → one user with 50k followers spikes lag → hybrid

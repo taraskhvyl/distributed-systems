@@ -1,0 +1,10 @@
+# Grafana provider: load the dashboards in infra/lgtm/dashboards (mounted as a directory,
+# so edits show up without a restart; Grafana rescans every 10 s).
+apiVersion: 1
+
+providers:
+  - name: mediashare
+    type: file
+    updateIntervalSeconds: 10
+    options:
+      path: /otel-lgtm/mediashare-dashboards

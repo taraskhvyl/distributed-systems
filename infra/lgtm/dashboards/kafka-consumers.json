@@ -1,0 +1,53 @@
+{
+  "uid": "kafka-consumers",
+  "title": "Kafka consumers",
+  "description": "Consumer-group lag, measured from the broker by the collector's kafka_metrics receiver (infra/lgtm/otelcol-kafka-lag.yaml).",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Lag per group (messages behind)",
+      "description": "Produced but not yet committed by the group. Growing = consumers can't keep up (or are stuck).",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (group) (kafka_consumer_group_lag_sum_ratio)",
+          "legendFormat": "{{group}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Group members",
+      "description": "A step here is a rebalance: every member stops consuming while partitions are reassigned.",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 0 } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_consumer_group_members",
+          "legendFormat": "{{group}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Lag per partition",
+      "description": "One line per partition. A partition that lags while others don't = a slow or dead owner, or a hot key.",
+      "gridPos": { "x": 0, "y": 9, "w": 24, "h": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka_consumer_group_lag_ratio",
+          "legendFormat": "{{group}} {{topic}}/{{partition}}"
+        }
+      ]
+    }
+  ]
+}

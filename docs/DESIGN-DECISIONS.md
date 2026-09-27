@@ -82,7 +82,24 @@ Details worth knowing:
   with multiple event types).
 - Consumer parallelism is bounded by partition count: 3 partitions → at most 3 processor
   instances doing work. Want more throughput? Add partitions. That's the concrete scaling
-  lever.
+  lever. Measured with 4 processors: the 4th got `[]`. The processor reads 2 topics
+  (6 partitions in total), but the default `range` assignor splits **each topic
+  separately**, so the first 3 members get one partition of each and the 4th gets
+  nothing. `roundrobin` would give 2/2/1/1. It still wouldn't add `file-events` throughput,
+  but it would spread the retry work.
+- **Consumer lag** = log-end offset − the group's committed offset, per partition: how
+  many messages exist that the group hasn't finished. It's measured from the **broker**
+  (collector `kafka_metrics` → Grafana "Kafka consumers"), not by the consumers, because a
+  dead consumer can't report its own lag. Measured: `docker kill` the owner of
+  `file-events/2` under load. That partition's lag climbed to 61 while the others stayed at
+  0. After **31 s** (`session.timeout.ms` = 30 s, the time the group needs to notice a
+  silent death) the idle 4th member took it over and drained it within 5 s. Nothing was
+  lost, because offsets are committed only after handling. The rebalance was
+  stop-the-world: every member revoked **all** its partitions, even those that didn't
+  move (eager protocol; `cooperative-sticky` revokes only the moved ones). Trade-off of
+  the timeout: shorter = faster failover, but more false "deaths" on a GC pause or a slow
+  handler. A clean shutdown (`consumer.close()`) leaves the group immediately, with no
+  30 s wait.
 - KRaft mode (no ZooKeeper) — worth one sentence: metadata moved into the brokers
   themselves via Raft.
 

@@ -11,4 +11,11 @@ services:
     networks: [data]
     ports:
       - "127.0.0.1:3000:3000"
+    environment:
+      # The image's hook for extra collector config; ours adds Kafka consumer lag.
+      OTELCOL_EXTRA_ARGS: --config=file:/otel-lgtm/otelcol-kafka-lag.yaml
+    volumes:
+      - ./infra/lgtm/otelcol-kafka-lag.yaml:/otel-lgtm/otelcol-kafka-lag.yaml:ro
+      - ./infra/lgtm/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/mediashare.yaml:ro
+      - ./infra/lgtm/dashboards:/otel-lgtm/mediashare-dashboards:ro
     restart: unless-stopped

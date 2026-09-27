@@ -29,7 +29,11 @@ def main() -> None:
         "auto.offset.reset": "earliest",
         "session.timeout.ms": SESSION_TIMEOUT_MS,
     })
-    consumer.subscribe([cfg.topic_main, cfg.topic_retry])
+    consumer.subscribe(
+        [cfg.topic_main, cfg.topic_retry],
+        on_assign=kafka_loop.log_assignment,
+        on_revoke=kafka_loop.log_revocation,
+    )
     logger.info(
         "processor started",
         extra={"ctx": {

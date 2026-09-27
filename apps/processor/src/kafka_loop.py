@@ -1,7 +1,7 @@
 import json
 import time
 
-from confluent_kafka import Consumer, KafkaError, KafkaException, Message
+from confluent_kafka import Consumer, KafkaError, KafkaException, Message, TopicPartition
 from opentelemetry import propagate, trace
 from opentelemetry.context import Context
 from opentelemetry.trace import SpanKind
@@ -38,6 +38,20 @@ def run(consumer: Consumer, processor: Processor, cfg: Config) -> None:
             continue
         _handle_message(msg, processor)
         consumer.commit(message=msg, asynchronous=False)
+
+
+def log_assignment(_consumer: Consumer, partitions: list[TopicPartition]) -> None:
+    """Rebalance callback: which partitions this instance owns now (empty = an idle member)."""
+    logger.info("partitions assigned", extra={"ctx": {"partitions": _names(partitions)}})
+
+
+def log_revocation(_consumer: Consumer, partitions: list[TopicPartition]) -> None:
+    """Rebalance callback: consumption of these partitions stops until the group settles."""
+    logger.info("partitions revoked", extra={"ctx": {"partitions": _names(partitions)}})
+
+
+def _names(partitions: list[TopicPartition]) -> list[str]:
+    return [f"{p.topic}/{p.partition}" for p in partitions]
 
 
 def _reap(processor: Processor) -> None:

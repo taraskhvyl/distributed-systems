@@ -61,6 +61,7 @@ make demo    # end-to-end walkthrough (tools/demo/client.py); this is the main t
 make logs    # follow all services
 make kafka-ui  # opt-in read-only Kafka dashboard on http://127.0.0.1:8080 (profile tools)
 # Grafana (traces + logs, always on): http://127.0.0.1:3000 → Explore → Tempo / Loki
+# Dashboards → "Kafka consumers": consumer-group lag + members (infra/lgtm/, provisioned)
 docker compose exec -T lgtm curl -sG localhost:3200/api/search --data-urlencode 'q={ name = "PUT /v1/files/:id/like" }'  # find traces (TraceQL)
 docker compose exec -T lgtm curl -s localhost:3200/api/traces/<traceId>   # full trace JSON; span ids are base64
 make down    # stop, keep data
@@ -131,6 +132,8 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
 - `infra/postgres/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need
   `make reset` (or a manual `ALTER` on a running db).
 - `lgtm` (`grafana/otel-lgtm`): OTLP backend for traces (Tempo) and logs (Loki), on `data`.
+  Metrics: Kafka consumer lag only, scraped from the broker by an overlay on its bundled
+  collector (`infra/lgtm/otelcol-kafka-lag.yaml`; Prometheus names get a `_ratio` suffix).
   Tracing is zero-code, configured by the `x-otel-env` / `x-node-otel-env` anchors in `compose/apps.yml`.
   How context crosses each hop: `docs/ARCHITECTURE.md` "Tracing".
 - Kafka topics: `file-events` (3 partitions), `file-events-retry`, `file-events-dlq`.

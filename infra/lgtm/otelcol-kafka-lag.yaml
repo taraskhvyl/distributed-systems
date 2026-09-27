@@ -1,0 +1,19 @@
+# Overlay for lgtm's bundled OTel collector (merged with its own otelcol-config.yaml via
+# OTELCOL_EXTRA_ARGS in compose/observability.yml). Adds consumer-group lag.
+#
+# Lag is measured from the broker, not reported by the consumers: a stuck or dead
+# consumer can't report its own lag, and that's exactly when lag matters.
+receivers:
+  kafka_metrics:
+    brokers: [kafka:9092]
+    scrapers: [consumers, topics]
+    collection_interval: 5s
+
+service:
+  pipelines:
+    # A separate pipeline: config merging replaces lists, so adding the receiver to the
+    # stock `metrics` pipeline would mean copying its receiver list here.
+    metrics/kafka:
+      receivers: [kafka_metrics]
+      processors: [batch]
+      exporters: [otlp_http/metrics]
