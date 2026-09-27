@@ -164,7 +164,8 @@ Follow-ups found in 2 (not scheduled):
     retries, outlier detection per upstream; Envoy emits its own spans (the edge shows up in
     Tempo).
   - ADR: keep JWT checks in the services too (defense in depth) or trust the edge?
-  - Prediction: _
+  - Prediction: _a bad token gets its 401 from Envoy and the api sees nothing; valid
+    requests get slower (the token is checked at the edge and again in the service)._
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
   - Prediction: _
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.
