@@ -181,6 +181,16 @@ Follow-ups found in 2 (not scheduled):
     browser sees "Failed to fetch" instead of a readable 401 (the api's own 401 had them).
     Fixed at the class level: the api host adds CORS headers `ADD_IF_ABSENT`, so every reply
     Envoy makes itself (401, 429) is readable and the services stay the owners of CORS.
+  - [x] Per-user limit on the JWT `sub` at the edge. Prediction: _the 429 comes from the
+    edge, and the api's Redis token bucket is no longer needed._ Design chosen: the edge
+    limits *all* requests per `sub` (10/s), the api keeps its *write* bucket (5 burst, 0.5/s)
+    — `envoyproxy/ratelimit` only has fixed windows, no token bucket, no `Retry-After`.
+    Outcome: **partly refuted** — which layer answers depends on which limit is tighter, not
+    on which is first. Bursts as alice: 15 GETs → 10 ok, 5 × 429 from the edge; 8 writes →
+    5 ok, 3 × 429 from the api; 15 writes → 5 ok, 5 edge + 5 api. The api bucket stays:
+    it's the only write limit, and it holds for callers that bypass Envoy (ADR 0003).
+    Two stages needed: per-IP before `jwt_authn`, per-user after (it reads `sub` from
+    `payload_in_metadata`). Edge 429s had no `Retry-After`; `local_reply_config` adds `1`.
 - [ ] `--scale api=3`: bottleneck moves to the Postgres pool (3 × `max:10`). Confirm multiple outbox relays don't double-publish (`SKIP LOCKED`). PgBouncer as a Q&A entry only.
   - Prediction: _
 - [ ] `--scale processor=4` on 3 partitions: one consumer sits idle. **Add consumer-lag metric** (first Grafana dashboard). Watch rebalances.

@@ -11,7 +11,7 @@ Each entry names the threat, the control, and the accepted trade-off.
 | Tampering                       | TLS at the edge; SigV4-signed presigned URLs (method, path, host, expiry); sha256 checksum recorded at processing time |
 | Repudiation                     | structured JSON logs with `eventId` correlation across api/processor/notifier |
 | Information disclosure          | private uploads bucket + short-TTL presigned GETs; 404 (not 403) for other users' files; log redaction of `Authorization` |
-| Denial of service               | two rate-limit layers (gateway per-IP via `ratelimit`, api per-user token bucket; both in Redis)        |
+| Denial of service               | three rate-limit layers (gateway per-IP and per-user via `ratelimit`, api per-user write bucket; all in Redis) |
 | Elevation of privilege          | realm roles (`user`/`admin`) checked server-side; per-service DB roles and scoped S3 identities |
 | Lateral movement                | network segmentation: gateway cannot reach data stores; processor unreachable from the edge; notifier exposes only `/v1/events` |
 
@@ -154,7 +154,7 @@ a 5-minute presigned URL behind the read gate.
 
 ## Rate limiting (defense in depth)
 
-Two layers with different keys and failure domains:
+Three layers with different keys and jobs:
 
 1. **Gateway per-IP limit** — Envoy asks the global `ratelimit` service
    (`infra/ratelimit/config.yaml`): 20 req/s per IP, 100 for S3, fixed one-second windows
@@ -162,7 +162,12 @@ Two layers with different keys and failure domains:
    application code. Global = counters in Redis, shared by every gateway replica.
    Static assets are exempt (the web app, Keycloak `/resources/`): a single page load
    fetches 10–25 files, which would drain the bucket and 429 the real request after it.
-2. **Redis token bucket per user** (`apps/api/src/http/rate-limit.ts`) — capacity 5,
+2. **Gateway per-user limit** — 10 req/s per JWT `sub`, every method, on `api.localhost`.
+   A second rate-limit stage that runs *after* `jwt_authn`, because `sub` only exists once
+   the token is verified (the per-IP stage runs before it, to cap junk-token floods cheaply).
+   Catches one token hammering GETs, and doesn't punish many users behind one NAT the way
+   per-IP does. Envoy's own 429s get `Retry-After: 1` (`local_reply_config`).
+3. **Redis token bucket per user** (`apps/api/src/http/rate-limit.ts`) — capacity 5,
    refill 0.5/s, applied to mutating methods only. The check-and-decrement runs as a
    **single Lua script** — atomic under Redis's single-threaded execution, so two
    concurrent requests can never both take the last token (a naive

@@ -22,6 +22,14 @@ descriptors:
           - key: remote_address
             rate_limit: { unit: second, requests_per_unit: 20 }
 
+  # Per user on the api host (descriptor built from the verified JWT `sub`, stage 1 in
+  # envoy.yaml). Every method counts; the api's token bucket still limits writes.
+  - key: generic_key
+    value: user
+    descriptors:
+      - key: sub
+        rate_limit: { unit: second, requests_per_unit: 10 }
+
   - key: generic_key
     value: s3 # presigned uploads/downloads
     descriptors:

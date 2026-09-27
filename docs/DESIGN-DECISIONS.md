@@ -377,8 +377,10 @@ Follow-ups:
 
 ## Q: How would you rate-limit this? 
 
-**A:** Two layers, different keys: per-IP at the gateway (Envoy asks the global
-`ratelimit` service, 20 req per second per IP; dumb and early) and Redis per-user token bucket (capacity 5, 0.5/s refill) on every
+**A:** Three layers, different keys: per-IP at the gateway (Envoy asks the global
+`ratelimit` service, 20 req per second per IP; dumb and early), per-user at the gateway
+(10 req/s per JWT `sub`, all methods; a second stage after `jwt_authn`, since `sub` exists
+only after verification), and Redis per-user token bucket (capacity 5, 0.5/s refill) on every
 state-changing request (anything but GET/HEAD/OPTIONS, so likes and follows count too). The bucket math is one **Lua script** — atomic, so concurrent requests can't
 both spend the last token (the naive GET/SET race). 429s carry `Retry-After`, and the
 demo client honors it — rate limiting is a protocol between server and client, not just

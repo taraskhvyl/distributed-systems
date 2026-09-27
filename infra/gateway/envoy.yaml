@@ -32,6 +32,17 @@ static_resources:
                 # We are the edge: the TCP peer is the client, so trust it (not an incoming
                 # X-Forwarded-For) and set X-Forwarded-For / -Proto for the services.
                 use_remote_address: true
+                # Envoy's own 429s (rate-limit service) carry no Retry-After, and clients back off
+                # by it. Every edge limit is a one-second window (infra/ratelimit/config.yaml), so
+                # "1" is exact. Applies to local replies only; the api's 429 keeps its own value.
+                local_reply_config:
+                  mappers:
+                    - filter:
+                        status_code_filter:
+                          comparison: { op: EQ, value: { default_value: 429, runtime_key: edge_429 } }
+                      headers_to_add:
+                        - header: { key: Retry-After, value: "1" }
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
                 access_log:
                   - name: envoy.access_loggers.stdout
                     typed_config:
@@ -53,10 +64,14 @@ static_resources:
                           # Why Envoy answered itself, e.g. jwt_authn_access_denied{Jwt_is_missing}.
                           details: "%RESPONSE_CODE_DETAILS%"
                 http_filters:
+                  # Rate limits run in two stages (a route's rate_limits entry picks one by
+                  # `stage`). Stage 0, per IP: before the JWT check, so junk-token floods are
+                  # capped before we pay for signature checks.
                   - name: envoy.filters.http.ratelimit
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
                       domain: gateway
+                      stage: 0
                       # Fail open, like the api's Redis bucket: if the rate-limit service is
                       # down, traffic flows unlimited rather than the whole edge failing.
                       failure_mode_deny: false
@@ -65,8 +80,7 @@ static_resources:
                         transport_api_version: V3
                         grpc_service: { envoy_grpc: { cluster_name: ratelimit } }
                   # Validates Keycloak access tokens at the edge: a missing or bad token gets
-                  # its 401 here and never reaches a service. After the per-IP limit on
-                  # purpose: a flood of junk tokens is capped before we pay for signature checks.
+                  # its 401 here and never reaches a service.
                   # Off by default; only hosts that opt in (typed_per_filter_config) require it.
                   - name: envoy.filters.http.jwt_authn
                     typed_config:
@@ -89,11 +103,25 @@ static_resources:
                           # Keep the Authorization header: the services verify the token too
                           # (defense in depth, docs/adr/0003-jwt-verified-at-edge-and-in-services.md).
                           forward: true
+                          # Verified claims go to dynamic metadata; the per-user limit reads `sub`.
+                          payload_in_metadata: jwt_payload
                       requirement_map:
                         keycloak: { provider_name: keycloak }
                       # A CORS preflight never carries the token (it asks whether sending one is
                       # allowed); 401'ing it would break every browser call.
                       bypass_cors_preflight: true
+                  # Stage 1, per user: after jwt_authn, because `sub` exists only once the token
+                  # is verified. Same service and fail-open policy as stage 0.
+                  - name: envoy.filters.http.ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+                      domain: gateway
+                      stage: 1
+                      failure_mode_deny: false
+                      timeout: 0.25s
+                      rate_limit_service:
+                        transport_api_version: V3
+                        grpc_service: { envoy_grpc: { cluster_name: ratelimit } }
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -148,8 +176,9 @@ static_resources:
                           route:
                             cluster: keycloak
                             append_x_forwarded_host: true
-                            rate_limits: &per-ip-edge
-                              - actions:
+                            rate_limits:
+                              - &per-ip-edge
+                                actions:
                                   - generic_key: { descriptor_value: edge }
                                   - masked_remote_address: { v4_prefix_mask_len: 24 }
                                   - remote_address: {}
@@ -187,9 +216,25 @@ static_resources:
                             cluster: notifier
                             timeout: 0s
                             idle_timeout: 3600s
-                            rate_limits: *per-ip-edge
+                            rate_limits:
+                              - *per-ip-edge
+                              # Per user (JWT `sub`), every method: catches one token hammering
+                              # GETs, which the api's bucket (writes only) doesn't count. The api
+                              # keeps its own write limit (docs/ROADMAP.md, Phase 3).
+                              - &per-user
+                                stage: 1
+                                actions:
+                                  - generic_key: { descriptor_value: user }
+                                  - metadata:
+                                      descriptor_key: sub
+                                      metadata_key:
+                                        key: envoy.filters.http.jwt_authn
+                                        path: [{ key: jwt_payload }, { key: sub }]
                         - match: { prefix: / }
-                          route: { cluster: api, append_x_forwarded_host: true, rate_limits: *per-ip-edge }
+                          route:
+                            cluster: api
+                            append_x_forwarded_host: true
+                            rate_limits: [*per-ip-edge, *per-user]
 
                     - name: s3
                       domains: [s3.localhost, "s3.localhost:443"]
