@@ -6,12 +6,17 @@ import { check, sleep } from 'k6'
 import { Counter } from 'k6/metrics'
 
 const API = 'https://api.localhost/v1'
-const TOKEN_URL = 'https://auth.localhost/realms/media/protocol/openid-connect/token'
+const AUTH = 'https://auth.localhost'
+const TOKEN_URL = `${AUTH}/realms/media/protocol/openid-connect/token`
 
-// Seeded dev users (infra/keycloak/media-realm.json), same defaults as tools/demo/client.py.
-// Deliberately duplicated: k6 can't import the Python client.
-const USERS = { demo: 'demo-pass', alice: 'alice-pass' }
-const USERNAMES = Object.keys(USERS)
+// alice owns the Published file everyone likes; her password is the seeded dev default
+// (infra/keycloak/media-realm.json, same as tools/demo/client.py; k6 can't import Python).
+const ALICE_PASSWORD = 'alice-pass'
+// Test-only users created by setup(). Many users = many per-user token buckets, like real
+// traffic; two users would just measure the bucket (run 1).
+const LOADTEST_USER_COUNT = Number(__ENV.LOADTEST_USERS ?? 50)
+const LOADTEST_PASSWORD = 'loadtest-pass'
+const LOADTEST_USERNAMES = Array.from({ length: LOADTEST_USER_COUNT }, (_, i) => `loadtest-${String(i + 1).padStart(2, '0')}`)
 
 const SAMPLE_PNG = open('/samples/sample.png', 'b')
 
@@ -54,21 +59,25 @@ export const options = {
   },
 }
 
-/** Runs once: tokens for the seeded users, and one Published file for everyone to like. */
+/**
+ * Runs once: create the loadtest users, get their tokens, publish one file as alice, and
+ * make every loadtest user follow alice so their feeds are not empty.
+ * Tokens live 5 min (realm default); the whole run takes under 2.
+ */
 export function setup() {
-  const tokens = {}
-  for (const username of USERNAMES) tokens[username] = fetchToken(username)
+  ensureLoadtestUsers()
+  const tokens = LOADTEST_USERNAMES.map((username) => fetchToken(username, LOADTEST_PASSWORD))
+  const aliceToken = fetchToken('alice', ALICE_PASSWORD)
 
-  const fileId = uploadFile(tokens.alice)
-  waitUntilReady(tokens.alice, fileId)
-  request('PATCH', `/files/${fileId}`, tokens.alice, 'publish', { visibility: 'public' })
-  request('PUT', '/users/alice/follow', tokens.demo, 'follow')
+  const fileId = uploadFile(aliceToken)
+  waitUntilReady(aliceToken, fileId)
+  request('PATCH', `/files/${fileId}`, aliceToken, 'publish', { visibility: 'public' })
+  for (const token of tokens) request('PUT', '/users/alice/follow', token, 'follow')
   return { tokens, fileId }
 }
 
 export default function (data) {
-  const username = USERNAMES[__VU % USERNAMES.length]
-  const token = data.tokens[username]
+  const token = data.tokens[__VU % data.tokens.length]
   const roll = Math.random()
 
   if (roll < FEED_SHARE) {
@@ -82,15 +91,43 @@ export default function (data) {
   sleep(THINK_TIME_S)
 }
 
-function fetchToken(username) {
-  const res = http.post(TOKEN_URL, {
-    grant_type: 'password',
-    client_id: 'media-cli',
-    username,
-    password: USERS[username],
-  })
+function fetchToken(username, password) {
+  const res = http.post(TOKEN_URL, { grant_type: 'password', client_id: 'media-cli', username, password })
   if (res.status !== 200) throw new Error(`token for ${username}: HTTP ${res.status}`)
   return res.json('access_token')
+}
+
+/**
+ * Creates loadtest-01..N in the media realm via Keycloak's admin REST API. Idempotent:
+ * 409 means the user already exists. They aren't in the realm JSON, so they vanish when
+ * Keycloak is recreated and come back on the next run.
+ */
+function ensureLoadtestUsers() {
+  const admin = http.post(`${AUTH}/realms/master/protocol/openid-connect/token`, {
+    grant_type: 'password',
+    client_id: 'admin-cli',
+    username: 'admin',
+    password: __ENV.KEYCLOAK_ADMIN_PASSWORD,
+  })
+  if (admin.status !== 200) throw new Error(`keycloak admin token: HTTP ${admin.status}`)
+  const headers = { Authorization: `Bearer ${admin.json('access_token')}`, 'Content-Type': 'application/json' }
+
+  for (const username of LOADTEST_USERNAMES) {
+    // Email and names too: Keycloak's user profile requires them, or login fails with
+    // "account is not fully set up".
+    const user = {
+      username,
+      enabled: true,
+      email: `${username}@localhost`,
+      emailVerified: true,
+      firstName: 'Load',
+      lastName: username,
+      credentials: [{ type: 'password', value: LOADTEST_PASSWORD, temporary: false }],
+    }
+    const res = http.post(`${AUTH}/admin/realms/media/users`, JSON.stringify(user), { headers })
+    const createdOrExists = res.status === 201 || res.status === 409
+    if (!createdOrExists) throw new Error(`create ${username}: HTTP ${res.status} ${res.body}`)
+  }
 }
 
 /** register → PUT the bytes to the presigned URL → complete. Returns the file id (or null). */

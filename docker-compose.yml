@@ -32,6 +32,13 @@ networks:
     name: mediashare-edge
   data:
     name: mediashare-data
+  # Only k6 and the gateway. The fixed subnet is what nginx exempts from per-IP limits
+  # (infra/gateway/nginx.conf, `geo`), so it must match there.
+  loadtest:
+    name: mediashare-loadtest
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   pgdata:
@@ -296,7 +303,12 @@ services:
 
   gateway:
     image: nginx:1.30-alpine
-    networks: [edge]
+    networks:
+      edge: {}
+      # The public host names resolve to the gateway only inside this network, so k6
+      # reaches it directly with its own IP instead of the host's shared one.
+      loadtest:
+        aliases: [api.localhost, auth.localhost, s3.localhost]
     ports:
       - "443:443"
     volumes:
@@ -319,19 +331,21 @@ services:
       retries: 30
     restart: unless-stopped
 
-  # Load generator (opt-in: make loadtest). Reaches the gateway on the host's :443 via
-  # host-gateway, like an outside client: TLS and every rate limit are in the path.
-  # Not on edge/data on purpose; it must not see anything a real client couldn't.
+  # Load generator (opt-in: make loadtest). Talks only to the gateway, like an outside
+  # client: TLS, routing and the per-user token bucket are in the path. Its own network
+  # gives it its own IP, which nginx exempts from the per-IP limit (it stands in for many
+  # clients). Not on edge/data: it must not see anything a real client couldn't.
   k6:
     image: grafana/k6:2.3.0
     profiles: [loadtest]
-    extra_hosts:
-      - "api.localhost:host-gateway"
-      - "auth.localhost:host-gateway"
-      - "s3.localhost:host-gateway"
+    networks: [loadtest]
     volumes:
       - ./tools/loadtest:/scripts:ro
       - ./tools/demo/samples:/samples:ro
     environment:
       VUS: ${VUS:-20}
+      LOADTEST_USERS: ${LOADTEST_USERS:-50}
+      # setup() creates the loadtest users through Keycloak's admin API (idempotent).
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
     command: ["run", "/scripts/baseline.js"]
+
