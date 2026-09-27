@@ -5,8 +5,10 @@
 const FRAME_SEPARATOR = '\n\n'
 const DEFAULT_EVENT_NAME = 'message'
 
+export type SseHandler = (name: string, data: Record<string, unknown>) => void
+
 /** Reads the stream until it ends, calling `onEvent(name, data)` for every event frame. */
-export async function readSseStream(body, onEvent) {
+export async function readSseStream(body: ReadableStream<BufferSource>, onEvent: SseHandler) {
   const reader = body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ''
 
@@ -25,7 +27,7 @@ export async function readSseStream(body, onEvent) {
   }
 }
 
-function parseFrame(frame) {
+function parseFrame(frame: string) {
   let name = DEFAULT_EVENT_NAME
   let data = ''
   for (const line of frame.split('\n')) {

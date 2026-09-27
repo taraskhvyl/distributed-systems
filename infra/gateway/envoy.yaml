@@ -132,10 +132,12 @@ static_resources:
                       response_headers_to_add:
                         # Tokens live in JS memory, so XSS = token theft. CSP is the main
                         # mitigation: only our own scripts run, and fetch() may only reach
-                        # our own hosts.
+                        # our own hosts. Inline *styles* are allowed: Radix (dialog scroll
+                        # lock) and sonner (toasts) inject <style> tags with computed values,
+                        # so hashes can't cover them. Scripts stay 'self' only (ADR 0004).
                         - header:
                             key: Content-Security-Policy
-                            value: "default-src 'self'; connect-src 'self' https://auth.localhost https://api.localhost https://s3.localhost; img-src 'self' https://s3.localhost; frame-ancestors 'none'; base-uri 'none'"
+                            value: "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://auth.localhost https://api.localhost https://s3.localhost; img-src 'self' https://s3.localhost; frame-ancestors 'none'; base-uri 'none'"
                           append_action: OVERWRITE_IF_EXISTS_OR_ADD
                         - header: { key: Cache-Control, value: no-cache }
                           append_action: OVERWRITE_IF_EXISTS_OR_ADD

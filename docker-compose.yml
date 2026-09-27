@@ -343,13 +343,12 @@ services:
       retries: 30
     restart: unless-stopped
 
-  # Serves the static browser app (apps/web) to the gateway; Envoy doesn't serve files.
-  # Stock nginx with its default config, on edge only. In production: a CDN or a bucket.
+  # Serves the browser app to the gateway; Envoy doesn't serve files. The image builds
+  # apps/web with Vite and copies dist/ into stock nginx (apps/web.Dockerfile). On edge only.
+  # In production: a CDN or a bucket. After a UI change: docker compose up -d --build web
   web:
-    image: nginx:1.30-alpine
+    build: { context: ., dockerfile: apps/web.Dockerfile }
     networks: [edge]
-    volumes:
-      - ./apps/web:/usr/share/nginx/html:ro
     restart: unless-stopped
 
   # Global rate limiting for the gateway: Envoy asks it (gRPC) per request; counters live

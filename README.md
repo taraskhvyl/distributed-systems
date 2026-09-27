@@ -13,7 +13,7 @@ flowchart LR
 
   subgraph edge["mediashare-edge network"]
     gateway["gateway (Envoy)"]
-    web["static web app (apps/web/)"]
+    web["web app (apps/web/, React, built by Vite)"]
     keycloak["keycloak (OIDC, JWT)"]
     api["api (Node + TS)"]
     notifier["notifier (Node, SSE)"]
@@ -109,7 +109,7 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 | service    | stack          | role                                                             |
 |------------|----------------|------------------------------------------------------------------|
 | gateway    | Envoy          | TLS termination, host routing, per-IP rate limit (via `ratelimit`), security headers |
-| web        | static HTML + ES modules | browser app: PKCE login, direct-to-S3 upload with progress, live status (no build step) |
+| web        | React + TS + Tailwind/shadcn (Vite), served by nginx | Instagram-style browser app: PKCE login, direct-to-S3 upload with progress, live status |
 | keycloak   | Keycloak 26    | OIDC identity provider, issues JWTs                              |
 | api        | Node 24 + TS (Fastify 5) | public REST API: auth, presigned URLs, idempotency, outbox relay |
 | processor  | Python 3.14    | Kafka consumer: malware scan, thumbnails, retry/DLQ, idempotent CAS claim |
@@ -147,8 +147,9 @@ apps/                  what gets deployed
   api/                 Node + TS REST API, outbox relay
   notifier/            Node + TS Kafka consumer + SSE endpoint
   processor/           Python worker (scan, thumbnail, retry/DLQ)
-  web/                 browser app (ES modules, no build step)
+  web/                 browser app (React + TS, features/ + adapters/, built by Vite)
   node.Dockerfile      one image recipe for both Node apps
+  web.Dockerfile       web app: Vite build, then nginx serves dist/
 packages/
   auth/                shared JWT verification (@mediashare/auth)
 infra/                 config for third-party components

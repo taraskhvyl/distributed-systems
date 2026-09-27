@@ -169,7 +169,7 @@ so it can't hold a client secret. Without a secret, whoever holds the authorizat
 there is: the URL (history, logs, other apps, malicious extensions).
 
 PKCE (RFC 7636) replaces the static secret with a **one-time secret per login**
-(`apps/web/app.js`, `login()` / `handleRedirect()`):
+(`apps/web/src/features/auth/login-flow.ts`, `login()` / `completeLoginRedirect()`):
 
 1. The app makes a random `code_verifier` and sends only `code_challenge = SHA-256(verifier)`
    in the `/auth` redirect.
@@ -184,7 +184,9 @@ a request without a challenge gets `invalid_request`.
 Follow-ups:
 - *"Where do tokens live?"* In a JS variable only. `localStorage` survives forever and any
   XSS can read it; memory limits theft to the XSS's lifetime. The strict CSP on
-  `app.localhost` (`infra/gateway/envoy.yaml`) is the XSS mitigation. Cost: a reload loses the
+  `app.localhost` (`infra/gateway/envoy.yaml`) is the XSS mitigation: scripts only from our
+  origin. Inline *styles* are allowed since the React rewrite (Radix and sonner inject
+  `<style>` tags); scripts are what matter for token theft (ADR 0004). Cost: a reload loses the
   tokens, so the app does a **silent login** on load: the same PKCE redirect with
   `prompt=none` ("only if you already know me, never show a form"). With a Keycloak SSO
   cookie it comes straight back with a code; without one, `error=login_required` and the
@@ -278,12 +280,12 @@ The hard part is **auth**, because the browser's `EventSource` can't send an
 | token in the query string | `EventSource('/events?access_token=…')` | the token lands in access logs (our gateway access log records the full path and query), browser history, `Referer` |
 | cookie | `EventSource` sends cookies | needs a cookie session (i.e. a BFF) plus CSRF thinking |
 | one-time ticket | `POST /events/ticket` with the bearer → 30 s single-use ticket in the URL | still a URL secret, but short-lived and single-use; needs a ticket store |
-| **`fetch()` + header** (ours) | read `res.body` as a stream, parse frames (`apps/web/js/sse-parser.js`) | we reimplement reconnect and parsing that `EventSource` gives for free |
+| **`fetch()` + header** (ours) | read `res.body` as a stream, parse frames (`apps/web/src/features/live-events/sse-parser.ts`) | we reimplement reconnect and parsing that `EventSource` gives for free |
 
 **Token expiry on a long-lived connection.** The token is verified once, at connect.
 Without more, a stream opened with a 5-minute token would stay authorized forever, and a
 disabled user would keep receiving events. So the server closes the stream at the token's
-`exp`, and the client reconnects with a refreshed token (`apps/web/js/live-events.js`).
+`exp`, and the client reconnects with a refreshed token (`apps/web/src/features/live-events/live-events.ts`).
 Observed: stream opened with `closesInMs: 299899`, closed exactly 5 minutes later, and
 reopened in the same second. Revocation latency is bounded by the token TTL.
 

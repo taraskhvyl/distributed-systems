@@ -3,6 +3,7 @@ packages:
   - packages/*
   - apps/api
   - apps/notifier
+  - apps/web
 
 # Workspace deps are copied into dependents (not symlinked), so `pnpm deploy` can produce a
 # self-contained folder per service for its Docker image.

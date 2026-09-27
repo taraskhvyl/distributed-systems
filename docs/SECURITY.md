@@ -13,6 +13,7 @@ Each entry names the threat, the control, and the accepted trade-off.
 | Information disclosure          | private uploads bucket + short-TTL presigned GETs; 404 (not 403) for other users' files; log redaction of `Authorization` |
 | Denial of service               | three rate-limit layers (gateway per-IP and per-user via `ratelimit`, api per-user write bucket; all in Redis) |
 | Elevation of privilege          | realm roles (`user`/`admin`) checked server-side; per-service DB roles and scoped S3 identities |
+| Token theft via XSS (browser)   | tokens only in JS memory (never `localStorage`); CSP on `app.localhost`: scripts only from our origin (inline styles allowed for Radix/sonner, ADR 0004); React escapes all user text |
 | Lateral movement                | network segmentation: gateway cannot reach data stores; processor unreachable from the edge; notifier exposes only `/v1/events` |
 
 ## Identity and access

@@ -62,8 +62,10 @@ Q&A entries: fan-out on read vs write; idempotent likes.
 
 Follow-ups found in 1b (not scheduled):
 - Private thumbnails via presigned GET, so unpublishing also revokes the thumbnail URL (SECURITY.md, "Thumbnails are capability URLs")
-- Optional: type-check the web app with JSDoc + `// @ts-check` and `tsc --noEmit` (keeps "no build step")
-- Optional frontend track: React + Vite + TS + Tailwind/shadcn rewrite of `apps/web/` (drops "no build step"; bundle with the pnpm switch)
+- [x] Frontend track: React + Vite + TS + Tailwind/shadcn rewrite of `apps/web/`, Instagram
+  layout (ADR 0004). Found on the way: the CSP silently dropped the `<style>` tags Radix
+  and sonner inject (unstyled toasts, no scroll lock) → `style-src 'self' 'unsafe-inline'`;
+  shadcn's CLI pulled in an unrelated npm package `cn` (replaced by a local helper).
 
 ## Phase 2 — Tracing
 

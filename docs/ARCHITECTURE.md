@@ -11,7 +11,7 @@ flowchart LR
 
   subgraph edge["mediashare-edge network"]
     gateway["gateway (Envoy)"]
-    web["static web app (apps/web/)"]
+    web["web app (apps/web/, React, built by Vite)"]
     keycloak["keycloak (OIDC, JWT)"]
     api["api (Node + TS)"]
     notifier["notifier (Node, SSE)"]
@@ -201,7 +201,7 @@ Explore → Tempo at http://127.0.0.1:3000. A like is one trace:
 
 ```mermaid
 flowchart TD
-  B["browser<br/>apps/web/js/trace.js mints traceparent"] -- "traceparent header" --> G["gateway (Envoy)<br/>passes header, no span yet"]
+  B["browser<br/>apps/web/src/adapters/traceparent.ts mints traceparent"] -- "traceparent header" --> G["gateway (Envoy)<br/>passes header, no span yet"]
   G --> R["api: PUT /v1/files/:id/like<br/>pg queries → COMMIT"]
   R -- "outbox_events.traceparent<br/>(same transaction)" --> O["api: outbox publish<br/>gap = outbox.delay_ms"]
   O --> K["api: send file-events"]
@@ -217,7 +217,7 @@ How the context crosses each hop:
 
 | hop | carrier | who does it |
 |-----|---------|-------------|
-| browser → api | `traceparent` HTTP header (CORS must allow it) | `apps/web/js/api.js`, http instrumentation |
+| browser → api | `traceparent` HTTP header (CORS must allow it) | `apps/web/src/adapters/http.ts`, http instrumentation |
 | request → relay | `outbox_events.traceparent` column | `insertOutboxEvent` / `publishRow` (by hand) |
 | relay/processor → Kafka → consumer | `traceparent` Kafka header | kafkajs / confluent-kafka instrumentation |
 | Kafka → processor handler | header extracted by hand | `apps/processor/src/kafka_loop.py` (the auto span only *links*) |

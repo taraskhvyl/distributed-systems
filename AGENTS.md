@@ -89,6 +89,19 @@ and everything external (Postgres, S3, Redis, Kafka) is reached only through `ad
 
 A new endpoint touches its feature's three files; a new external system gets an adapter.
 
+**Every app follows this shape, the browser app included.** No `lib/`, `utils/` or
+`helpers/` junk drawers, and no single controller for all features. Decide the folders
+*before* writing the first file. `apps/web/src/` maps the same layers:
+
+- `main.tsx`: entry (finish the login redirect, render). `app/`: composition only (page
+  switch, nav shell, wiring one feature's event to another's refresh).
+- `features/<feature>/`: `<feature>-api.ts` = the api endpoints it calls (like a
+  repository: HTTP only), `use-<feature>.ts` = state + actions (like a service),
+  `*-page.tsx` / components = rendering only (like routes). Features don't import each
+  other's hooks; `app/` connects them.
+- `adapters/`: everything external (api HTTP client, S3 presigned upload, Keycloak endpoints).
+- `components/ui/`: shadcn-generated, edit sparingly; `components/`: shared presentational bits.
+
 Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party config),
 `tools/` (demo, scripts; never deployed), `docs/`.
 
@@ -105,7 +118,8 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   (build context `.`; `.dockerignore` keeps `.env` and certs out). Adding a dependency:
   `pnpm --filter <service> add <pkg>`, then commit `pnpm-lock.yaml` (the image build uses
   `--frozen-lockfile` and fails on a stale lockfile).
-- `apps/web/`: static browser app (`app.localhost`), native ES modules in `apps/web/js/`, no build step.
+- `apps/web/`: browser app (`app.localhost`), React + TS + Tailwind + shadcn, built by Vite
+  (`apps/web.Dockerfile`: build stage, then nginx serves `dist/`). ADR 0004.
 - `infra/gateway/envoy.yaml`: Envoy edge. TLS, host routing, security headers/CSP, JWT check
   for `api.localhost` (`jwt_authn`; services verify again), per-IP and
   per-user (JWT `sub`) limits through the `ratelimit` service (`infra/ratelimit/config.yaml`, counters in Redis).
