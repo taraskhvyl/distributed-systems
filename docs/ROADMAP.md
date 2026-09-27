@@ -153,12 +153,16 @@ Follow-ups found in 2 (not scheduled):
     exempt from per-IP limits, 50 test users (`setup()` creates them). Prediction: _
 - [ ] **Swap the gateway: nginx → Envoy.** Question: what does a real API gateway add over a
   reverse proxy, and what does it cost?
-  - Parity first (`make demo` must pass): TLS, host routing (app/api/auth/s3), SSE without
-    buffering and with long timeouts, security headers/CSP, `traceparent` passthrough.
-    Envoy doesn't serve files: `apps/web` needs a small static server behind it.
-  - Per-IP limit: Envoy's `local_ratelimit` is one bucket per route, not per client. Per-IP
-    (and the load-generator exemption) needs the global rate-limit service
-    (`envoyproxy/ratelimit` + Redis): local vs global limiting.
+  - [x] Parity (`make demo` passes): TLS + HTTP/2, host routing (app/api/auth/s3), SSE
+    streamed with `timeout: 0s`, security headers/CSP, `traceparent` passthrough. `apps/web`
+    is served by a stock nginx `web` container (Envoy doesn't serve files).
+  - [x] Per-IP limit via the global rate-limit service (`envoyproxy/ratelimit` + Redis):
+    Envoy's `local_ratelimit` is one bucket per route, not per client. Fixed one-second
+    windows (no burst); the loadtest /24 is `unlimited` via a `masked_remote_address`
+    descriptor. Finding: per-IP and per-user limits now fail open on the **same Redis**
+    (with nginx they were separate failure domains). Backstop to add: `local_ratelimit`.
+    Side find: the k6 smoke run made 50 users follow alice and broke `make demo`'s exact
+    assertions; the load test now uses its own author (`loadtest-01`).
   - Then the gateway features: `jwt_authn` validates Keycloak JWTs at the edge (bad tokens
     never reach a service); per-user limit keyed on the JWT `sub` at the edge; timeouts,
     retries, outlier detection per upstream; Envoy emits its own spans (the edge shows up in

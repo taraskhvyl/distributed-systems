@@ -10,7 +10,7 @@ flowchart LR
   browser["browser / tools/demo/client.py"] -- "HTTPS :443" --> gateway
 
   subgraph edge["mediashare-edge network"]
-    gateway["gateway (nginx)"]
+    gateway["gateway (Envoy)"]
     web["static web app (apps/web/)"]
     keycloak["keycloak (OIDC, JWT)"]
     api["api (Node + TS)"]
@@ -60,7 +60,7 @@ Network rules (enforced by Docker, mirroring VPC subnets + security groups):
 | lgtm       | ✖    | ✔    | api, processor, notifier (OTLP); host loopback :3000 | — |
 
 The gateway is *physically incapable* of reaching the database, Kafka, or Redis. Even if
-nginx were fully compromised, data stores are unreachable from it. The processor is not on
+Envoy were fully compromised, data stores are unreachable from it. The processor is not on
 the edge network at all. The notifier is, because it serves the browser's SSE stream: see
 "Notifier edge exposure" in [SECURITY.md](SECURITY.md).
 
@@ -200,7 +200,7 @@ Explore → Tempo at http://127.0.0.1:3000. A like is one trace:
 
 ```mermaid
 flowchart TD
-  B["browser<br/>apps/web/js/trace.js mints traceparent"] -- "traceparent header" --> G["gateway (nginx)<br/>passes header, no span"]
+  B["browser<br/>apps/web/js/trace.js mints traceparent"] -- "traceparent header" --> G["gateway (Envoy)<br/>passes header, no span yet"]
   G --> R["api: PUT /v1/files/:id/like<br/>pg queries → COMMIT"]
   R -- "outbox_events.traceparent<br/>(same transaction)" --> O["api: outbox publish<br/>gap = outbox.delay_ms"]
   O --> K["api: send file-events"]

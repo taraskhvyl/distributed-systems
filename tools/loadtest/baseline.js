@@ -1,6 +1,7 @@
 // Phase 3 baseline: a mix of feed reads, likes and uploads, ramped to a fixed number of
 // virtual users. Run with `make loadtest`. Goes through the gateway like a real client,
-// so TLS, nginx rate limits and the per-user token bucket are part of what's measured.
+// so TLS, the gateway and the per-user token bucket are part of what's measured. Its network
+// is exempt from per-IP limits (infra/ratelimit/config.yaml): k6 stands in for many clients.
 import http from 'k6/http'
 import { check, sleep } from 'k6'
 import { Counter } from 'k6/metrics'
@@ -9,11 +10,9 @@ const API = 'https://api.localhost/v1'
 const AUTH = 'https://auth.localhost'
 const TOKEN_URL = `${AUTH}/realms/media/protocol/openid-connect/token`
 
-// alice owns the Published file everyone likes; her password is the seeded dev default
-// (infra/keycloak/media-realm.json, same as tools/demo/client.py; k6 can't import Python).
-const ALICE_PASSWORD = 'alice-pass'
 // Test-only users created by setup(). Many users = many per-user token buckets, like real
-// traffic; two users would just measure the bucket (run 1).
+// traffic; two users would just measure the bucket (run 1). The seeded demo users are never
+// touched, so `make demo`'s exact assertions (e.g. alice has 1 follower) keep holding.
 const LOADTEST_USER_COUNT = Number(__ENV.LOADTEST_USERS ?? 50)
 const LOADTEST_PASSWORD = 'loadtest-pass'
 const LOADTEST_USERNAMES = Array.from({ length: LOADTEST_USER_COUNT }, (_, i) => `loadtest-${String(i + 1).padStart(2, '0')}`)
@@ -60,19 +59,20 @@ export const options = {
 }
 
 /**
- * Runs once: create the loadtest users, get their tokens, publish one file as alice, and
- * make every loadtest user follow alice so their feeds are not empty.
+ * Runs once: create the loadtest users and get their tokens. The first user publishes one
+ * file (the one everyone likes); all others follow it, so their feeds are not empty.
  * Tokens live 5 min (realm default); the whole run takes under 2.
  */
 export function setup() {
   ensureLoadtestUsers()
   const tokens = LOADTEST_USERNAMES.map((username) => fetchToken(username, LOADTEST_PASSWORD))
-  const aliceToken = fetchToken('alice', ALICE_PASSWORD)
+  const [authorName] = LOADTEST_USERNAMES
+  const [authorToken, ...followerTokens] = tokens
 
-  const fileId = uploadFile(aliceToken)
-  waitUntilReady(aliceToken, fileId)
-  request('PATCH', `/files/${fileId}`, aliceToken, 'publish', { visibility: 'public' })
-  for (const token of tokens) request('PUT', '/users/alice/follow', token, 'follow')
+  const fileId = uploadFile(authorToken)
+  waitUntilReady(authorToken, fileId)
+  request('PATCH', `/files/${fileId}`, authorToken, 'publish', { visibility: 'public' })
+  for (const token of followerTokens) request('PUT', `/users/${authorName}/follow`, token, 'follow')
   return { tokens, fileId }
 }
 

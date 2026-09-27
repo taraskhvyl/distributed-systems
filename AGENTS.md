@@ -106,7 +106,9 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
   `pnpm --filter <service> add <pkg>`, then commit `pnpm-lock.yaml` (the image build uses
   `--frozen-lockfile` and fails on a stale lockfile).
 - `apps/web/`: static browser app (`app.localhost`), native ES modules in `apps/web/js/`, no build step.
-- `infra/gateway/nginx.conf`: TLS, host routing, per-IP rate limit, CSP for the web app.
+- `infra/gateway/envoy.yaml`: Envoy edge. TLS, host routing, security headers/CSP, per-IP
+  limits through the `ratelimit` service (`infra/ratelimit/config.yaml`, counters in Redis).
+  `web` (stock nginx) serves `apps/web`; Envoy doesn't serve files.
 - `infra/postgres/init/`: schema and roles. **Runs only on a fresh volume.** Schema changes need
   `make reset` (or a manual `ALTER` on a running db).
 - `lgtm` (`grafana/otel-lgtm`): OTLP backend for traces (Tempo) and logs (Loki), on `data`.
@@ -120,6 +122,12 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
 - Delivery is at-least-once everywhere. Every consumer must stay idempotent.
 - The processor DB role only has `SELECT, UPDATE` on `files`. It cannot write the outbox.
 - Networks: the gateway is on `edge` only and cannot reach postgres/kafka/redis. Keep it that way.
+  (`ratelimit` bridges edge and data to reach Redis; the gateway only talks gRPC to it.)
+- Gateway config is a single-file bind mount: after editing `envoy.yaml`, run
+  `docker compose restart gateway` (an editor's save replaces the inode). Validate first:
+  `docker compose run --rm --no-deps gateway --mode validate -c /etc/envoy/envoy.yaml`.
+- curl resolves every `*.localhost` to loopback itself (RFC 6761), ignoring Docker DNS.
+  Inside the `loadtest` network use `curl --resolve host:443:<gateway ip>`.
   api and notifier are on both networks (the notifier serves SSE to the browser).
 - Shared compose values live in `x-` anchors at the top of `docker-compose.yml`
   (`x-web-origin`, `x-auth-env`). Reference them; don't repeat the literals.

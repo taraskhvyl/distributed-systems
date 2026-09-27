@@ -1,0 +1,37 @@
+# Rules for the global rate-limit service (envoyproxy/ratelimit). Envoy sends a descriptor
+# per request (infra/gateway/envoy.yaml, `rate_limits`); this file says how many per unit.
+# Counters live in Redis, so every gateway replica shares them: that is what makes the
+# limit "global" (Envoy's local_ratelimit would be one bucket per gateway process).
+#
+# Fixed window, not nginx's leaky bucket: up to N requests per wall-clock second, no burst.
+# The numbers approximate the old nginx `rate + burst`.
+domain: gateway
+descriptors:
+  - key: generic_key
+    value: edge # api, auth
+    descriptors:
+      # The loadtest network (docker-compose.yml): k6 stands in for many clients.
+      - key: masked_remote_address
+        value: 172.30.0.0/24
+        descriptors:
+          - key: remote_address
+            rate_limit: { unlimited: true }
+      # Everyone else, per client IP. Was: rate=10r/s burst=20.
+      - key: masked_remote_address
+        descriptors:
+          - key: remote_address
+            rate_limit: { unit: second, requests_per_unit: 20 }
+
+  - key: generic_key
+    value: s3 # presigned uploads/downloads
+    descriptors:
+      - key: masked_remote_address
+        value: 172.30.0.0/24
+        descriptors:
+          - key: remote_address
+            rate_limit: { unlimited: true }
+      # Was: rate=50r/s burst=100.
+      - key: masked_remote_address
+        descriptors:
+          - key: remote_address
+            rate_limit: { unit: second, requests_per_unit: 100 }

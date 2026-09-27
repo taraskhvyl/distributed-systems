@@ -12,7 +12,7 @@ flowchart LR
   browser["browser / tools/demo/client.py"] -- "HTTPS :443" --> gateway
 
   subgraph edge["mediashare-edge network"]
-    gateway["gateway (nginx)"]
+    gateway["gateway (Envoy)"]
     web["static web app (apps/web/)"]
     keycloak["keycloak (OIDC, JWT)"]
     api["api (Node + TS)"]
@@ -108,7 +108,7 @@ Keycloak admin console: `https://auth.localhost/admin` (user `admin`, password f
 
 | service    | stack          | role                                                             |
 |------------|----------------|------------------------------------------------------------------|
-| gateway    | nginx          | TLS termination, host routing, per-IP rate limit, security headers, serves the web app |
+| gateway    | Envoy          | TLS termination, host routing, per-IP rate limit (via `ratelimit`), security headers |
 | web        | static HTML + ES modules | browser app: PKCE login, direct-to-S3 upload with progress, live status (no build step) |
 | keycloak   | Keycloak 26    | OIDC identity provider, issues JWTs                              |
 | api        | Node 24 + TS (Fastify 5) | public REST API: auth, presigned URLs, idempotency, outbox relay |
@@ -152,7 +152,8 @@ apps/                  what gets deployed
 packages/
   auth/                shared JWT verification (@mediashare/auth)
 infra/                 config for third-party components
-  gateway/             nginx config + TLS certs
+  gateway/             Envoy config + TLS certs
+  ratelimit/           global rate-limit rules (per-IP)
   keycloak/            realm import
   postgres/init/       schema + roles (fresh volume only)
 tools/                 dev and test tooling, never deployed

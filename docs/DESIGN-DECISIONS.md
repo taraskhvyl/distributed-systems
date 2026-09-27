@@ -166,7 +166,7 @@ a request without a challenge gets `invalid_request`.
 Follow-ups:
 - *"Where do tokens live?"* In a JS variable only. `localStorage` survives forever and any
   XSS can read it; memory limits theft to the XSS's lifetime. The strict CSP on
-  `app.localhost` (`infra/gateway/nginx.conf`) is the XSS mitigation. Cost: a reload loses the
+  `app.localhost` (`infra/gateway/envoy.yaml`) is the XSS mitigation. Cost: a reload loses the
   tokens, so the app does a **silent login** on load: the same PKCE redirect with
   `prompt=none` ("only if you already know me, never show a form"). With a Keycloak SSO
   cookie it comes straight back with a code; without one, `error=login_required` and the
@@ -194,7 +194,7 @@ Experiment (run): log in on `https://app.localhost`, then open
 
 - **Rate limit vs page weight.** The account console loads ~25 static files in one burst,
   drained the per-IP `edge` bucket, and the `/token` POST right after got 429. Fix:
-  `/resources/` is exempt (`infra/gateway/nginx.conf`), like the web app's static files.
+  `/resources/` is exempt (`infra/gateway/envoy.yaml`, no `rate_limits` on that route), like the web app's static files.
 - **Signature valid ≠ token meant for me.** The Account API returned 401: seeded users
   had only `user`, not the realm default role, so their tokens carried no
   `aud: account`. Keycloak's own APIs check `aud`; ours only check `iss` (fine while one
@@ -249,7 +249,7 @@ Follow-ups:
 served by the notifier at `GET /v1/events` (`apps/notifier/src/sse/events-server.ts`).
 The notifier already consumes `file-events`, so every event whose `ownerId` matches the
 stream's user is written to it (`StreamRegistry.publish`). SSE, not WebSocket, because
-traffic is one-way (server → browser), it is plain HTTP through nginx, and it needs no
+traffic is one-way (server → browser), it is plain HTTP through the gateway, and it needs no
 protocol upgrade.
 
 The hard part is **auth**, because the browser's `EventSource` can't send an
@@ -257,7 +257,7 @@ The hard part is **auth**, because the browser's `EventSource` can't send an
 
 | option | how | problem |
 |---|---|---|
-| token in the query string | `EventSource('/events?access_token=…')` | the token lands in access logs (our nginx log records `$request_uri`), browser history, `Referer` |
+| token in the query string | `EventSource('/events?access_token=…')` | the token lands in access logs (our gateway access log records the full path and query), browser history, `Referer` |
 | cookie | `EventSource` sends cookies | needs a cookie session (i.e. a BFF) plus CSRF thinking |
 | one-time ticket | `POST /events/ticket` with the bearer → 30 s single-use ticket in the URL | still a URL secret, but short-lived and single-use; needs a ticket store |
 | **`fetch()` + header** (ours) | read `res.body` as a stream, parse frames (`apps/web/js/sse-parser.js`) | we reimplement reconnect and parsing that `EventSource` gives for free |
@@ -275,8 +275,9 @@ Follow-ups:
   `Last-Event-ID` and a replayable store (e.g. Kafka offsets per user, or a short outbox).
 - *"Reconnect storms?"* Exponential backoff with jitter (50–150 %), capped at 30 s, so a
   notifier restart doesn't bring every client back in the same instant.
-- *"Proxies?"* nginx has `proxy_buffering off` (or events sit in a buffer) and a long
-  `proxy_read_timeout`; the server writes a `: ping` comment every 25 s so idle
+- *"Proxies?"* The gateway must not buffer (Envoy streams by default; nginx needed
+  `proxy_buffering off`) and must not time the stream out (route `timeout: 0s`,
+  `idle_timeout: 3600s` in `envoy.yaml`); the server writes a `: ping` comment every 25 s so idle
   intermediaries keep the connection and dead peers are detected.
 - *"Does it scale?"* Not yet: the registry is in one process's memory. With 3 replicas,
   Kafka hands an event to whichever replica owns the partition, which may not hold the
@@ -358,20 +359,22 @@ Follow-ups:
 
 ## Q: How would you rate-limit this? 
 
-**A:** Two layers, different keys, different failure domains: nginx per-IP (10 r/s,
-dumb and early) and Redis per-user token bucket (capacity 5, 0.5/s refill) on every
+**A:** Two layers, different keys: per-IP at the gateway (Envoy asks the global
+`ratelimit` service, 20 req per second per IP; dumb and early) and Redis per-user token bucket (capacity 5, 0.5/s refill) on every
 state-changing request (anything but GET/HEAD/OPTIONS, so likes and follows count too). The bucket math is one **Lua script** — atomic, so concurrent requests can't
 both spend the last token (the naive GET/SET race). 429s carry `Retry-After`, and the
 demo client honors it — rate limiting is a protocol between server and client, not just
-a wall. Design trade-off: the Redis layer **fails open** if Redis dies (nginx
-still holds the perimeter); strictness vs availability is a per-system decision.
+a wall. Design trade-off: both layers **fail open** if Redis dies, and since the Envoy swap they
+share that Redis, so they are no longer separate failure domains (with nginx, the per-IP
+counters lived in nginx's own memory). Backstop: an Envoy `local_ratelimit` per process.
+Strictness vs availability is a per-system decision.
 Run `make demo` step 11: 3 accepted, 9 rate-limited.
 
-Lesson from 1b: the browser showed only `Failed to fetch`. The cause was nginx's per-IP
+Lesson from 1b: the browser showed only `Failed to fetch`. The cause was the gateway's (then nginx's) per-IP
 limit, which also covered the web app's static files. One login (Keycloak pages, ~10 ES
 modules, token, files, feed) drained the bucket, and Docker Desktop makes every local
-client the same IP. **An nginx 429 has no CORS headers, so the browser hides it from JS**:
-a rate limit looks like a network error. Fixes: no `limit_req` on static files (nothing
+client the same IP. **A gateway 429 has no CORS headers, so the browser hides it from JS**:
+a rate limit looks like a network error. Fixes: no per-IP limit on static files (nothing
 upstream to protect), and no duplicate refetch on the first SSE connect. Per-IP limits
 also hurt real users behind one NAT (offices, mobile carriers); that's why the per-user
 Redis layer exists.
@@ -467,7 +470,7 @@ Known limitations, tracked deliberately:
 
 - Upload URL TTL 10 min; download 5 min; token TTL 300 s; bucket names
   `media-uploads` / `media-thumbnails`; consumer groups `processor` / `notifier`;
-  rate limits 10 r/s per IP at nginx, 5-capacity/0.5 rps per user in Redis.
+  rate limits 20 req/s per IP at the gateway (`ratelimit` service), 5-capacity/0.5 rps per user in Redis.
 - The event envelope: `{eventId, eventType, aggregateId, occurredAt, payload, attempt}`.
 - Infected marker: the EICAR test string — the processor deletes the object and marks
   `infected`; downloads then 403.

@@ -32,8 +32,8 @@ networks:
     name: mediashare-edge
   data:
     name: mediashare-data
-  # Only k6 and the gateway. The fixed subnet is what nginx exempts from per-IP limits
-  # (infra/gateway/nginx.conf, `geo`), so it must match there.
+  # Only k6 and the gateway. The fixed subnet is what the rate-limit rules exempt from
+  # per-IP limits (infra/ratelimit/config.yaml), so it must match there.
   loadtest:
     name: mediashare-loadtest
     ipam:
@@ -301,8 +301,14 @@ services:
       retries: 30
     restart: unless-stopped
 
+  # Edge gateway (Envoy): TLS, host routing, security headers, per-IP limits via the
+  # ratelimit service. The only service with a published port. Config: infra/gateway/envoy.yaml.
   gateway:
-    image: nginx:1.30-alpine
+    image: envoyproxy/envoy:v1.39.1
+    environment:
+      # Run as root, like nginx's master did: server.key is 0600 on the host mount and the
+      # default envoy user (uid 101) can't read it. Production gets certs via SDS/secrets.
+      ENVOY_UID: "0"
     networks:
       edge: {}
       # The public host names resolve to the gateway only inside this network, so k6
@@ -312,28 +318,66 @@ services:
     ports:
       - "443:443"
     volumes:
-      - ./infra/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./infra/gateway/certs:/etc/nginx/certs:ro
-      - ./apps/web:/usr/share/nginx/web:ro
+      - ./infra/gateway/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./infra/gateway/certs:/certs:ro
     depends_on:
       api:
         condition: service_started
       notifier:
+        condition: service_started
+      web:
+        condition: service_started
+      ratelimit:
         condition: service_started
       keycloak:
         condition: service_healthy
       storage:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --no-check-certificate -O- https://127.0.0.1/healthz || exit 1"]
+      # The image has no curl/wget; ask Envoy's loopback admin API with bash's /dev/tcp.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9901 && printf \"GET /ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && grep -q LIVE <&3'"]
       interval: 10s
       timeout: 5s
       retries: 30
     restart: unless-stopped
 
+  # Serves the static browser app (apps/web) to the gateway; Envoy doesn't serve files.
+  # Stock nginx with its default config, on edge only. In production: a CDN or a bucket.
+  web:
+    image: nginx:1.30-alpine
+    networks: [edge]
+    volumes:
+      - ./apps/web:/usr/share/nginx/html:ro
+    restart: unless-stopped
+
+  # Global rate limiting for the gateway: Envoy asks it (gRPC) per request; counters live
+  # in Redis, so all gateway replicas share one limit. Rules: infra/ratelimit/config.yaml.
+  # On edge (reached by the gateway) and data (reaches Redis); the gateway itself stays
+  # edge-only and never touches Redis.
+  ratelimit:
+    image: envoyproxy/ratelimit:0482748e
+    command: ["/bin/ratelimit"]
+    networks: [edge, data]
+    environment:
+      USE_STATSD: "false"
+      LOG_LEVEL: warn
+      GRPC_PORT: "8081"
+      REDIS_SOCKET_TYPE: tcp
+      REDIS_URL: redis:6379
+      REDIS_AUTH: ${REDIS_PASSWORD:?}
+      RUNTIME_ROOT: /data
+      RUNTIME_SUBDIRECTORY: ratelimit
+      RUNTIME_WATCH_ROOT: "false"
+    volumes:
+      - ./infra/ratelimit/config.yaml:/data/ratelimit/config/config.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   # Load generator (opt-in: make loadtest). Talks only to the gateway, like an outside
   # client: TLS, routing and the per-user token bucket are in the path. Its own network
-  # gives it its own IP, which nginx exempts from the per-IP limit (it stands in for many
+  # gives it its own IP, which is exempt from the per-IP limit (it stands in for many
   # clients). Not on edge/data: it must not see anything a real client couldn't.
   k6:
     image: grafana/k6:2.3.0

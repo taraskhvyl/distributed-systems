@@ -11,7 +11,7 @@ Each entry names the threat, the control, and the accepted trade-off.
 | Tampering                       | TLS at the edge; SigV4-signed presigned URLs (method, path, host, expiry); sha256 checksum recorded at processing time |
 | Repudiation                     | structured JSON logs with `eventId` correlation across api/processor/notifier |
 | Information disclosure          | private uploads bucket + short-TTL presigned GETs; 404 (not 403) for other users' files; log redaction of `Authorization` |
-| Denial of service               | two rate-limit layers (nginx per-IP, Redis per-user token bucket)        |
+| Denial of service               | two rate-limit layers (gateway per-IP via `ratelimit`, api per-user token bucket; both in Redis)        |
 | Elevation of privilege          | realm roles (`user`/`admin`) checked server-side; per-service DB roles and scoped S3 identities |
 | Lateral movement                | network segmentation: gateway cannot reach data stores; processor unreachable from the edge; notifier exposes only `/v1/events` |
 
@@ -65,8 +65,8 @@ Since Phase 1a the notifier is on **both** networks: the gateway routes
 `api.localhost/v1/events` (SSE) to it, and it fetches Keycloak's JWKS over `edge`.
 
 What limits the exposure:
-- No host port. Only the gateway reaches it, and nginx routes exactly one path
-  (`location = /v1/events`); everything else on the notifier is unreachable from outside.
+- No host port. Only the gateway reaches it, and Envoy routes exactly one path
+  (`match: { path: /v1/events }`); everything else on the notifier is unreachable from outside.
 - Per-IP rate limit (`edge` zone) on connects, so reconnect storms are bounded.
 - A valid Keycloak JWT is required (`@mediashare/auth`), and a user only receives events
   whose `ownerId` equals their `sub`.
@@ -89,9 +89,10 @@ TLS terminates at the gateway; internal traffic is plaintext inside the trusted 
   browsers and macOS reject a wildcard directly under a single-label TLD (same rule that
   forbids `*.com`). It is also `CA:FALSE` with `extendedKeyUsage=serverAuth`, which macOS
   requires for TLS certs.
-- nginx: TLS 1.2/1.3 only, `ssl_prefer_server_ciphers off` (modern guidance), session
-  caching, HSTS + `X-Content-Type-Options: nosniff` + `X-Frame-Options` + `Referrer-Policy`
-  on every route, JSON access logs, `return 444` for unknown hosts.
+- Envoy: TLS 1.2 minimum (BoringSSL's default cipher list), HTTP/2 via ALPN, HSTS +
+  `X-Content-Type-Options: nosniff` + `X-Frame-Options` + `Referrer-Policy` per host,
+  JSON access logs with response flags, 404 for unknown hosts (nginx could drop the
+  connection with `444`; Envoy always answers). Admin API on loopback only.
 - Self-signed is correct for local dev (trust is bootstrapped by you); in production it is
   ACM/ACME-managed certs with rotation. The client sets `verify=False` *only* because the
   CA is your own laptop — with a real CA the same code path verifies normally.
@@ -155,8 +156,10 @@ a 5-minute presigned URL behind the read gate.
 
 Two layers with different keys and failure domains:
 
-1. **nginx `limit_req`** — per client IP, coarse (10 r/s, burst 20; 50 r/s for S3).
-   Stops obvious floods before they touch application code. Cheap, dumb, effective.
+1. **Gateway per-IP limit** — Envoy asks the global `ratelimit` service
+   (`infra/ratelimit/config.yaml`): 20 req/s per IP, 100 for S3, fixed one-second windows
+   (no burst, unlike nginx's leaky bucket). Stops obvious floods before they touch
+   application code. Global = counters in Redis, shared by every gateway replica.
    Static assets are exempt (the web app, Keycloak `/resources/`): a single page load
    fetches 10–25 files, which would drain the bucket and 429 the real request after it.
 2. **Redis token bucket per user** (`apps/api/src/http/rate-limit.ts`) — capacity 5,
@@ -167,8 +170,9 @@ Two layers with different keys and failure domains:
 
 Trade-off made explicit: if Redis is down, `allowMutation` **fails open** (logs a warning,
 allows the request). We chose availability over strictness for a demo; a payment ledger
-might choose the opposite. The layered design means the nginx layer still holds when
-Redis fails. Also note the client's share of responsibility: 429 + `Retry-After` only
+might choose the opposite. **Since the Envoy swap both layers fail open on the same Redis**: a Redis outage removes
+all rate limiting. The backstop would be Envoy's `local_ratelimit` (per process, no
+Redis), coarse but independent. Also note the client's share of responsibility: 429 + `Retry-After` only
 works if clients honor it — the demo client does (`api_retry`).
 
 ## Database least privilege
@@ -200,7 +204,7 @@ as a link) and applies its own sampling. The SSE frame's `traceId` is an id, not
 
 ## Production hardening checklist (deliberately out of scope here)
 
-- WAF in front of the gateway (the nginx layer is not a WAF)
+- WAF in front of the gateway (Envoy here is not a WAF)
 - mTLS or a service mesh for east-west traffic
 - S3: SSE-KMS at rest, versioning + object lock on uploads, lifecycle to cold storage
 - Postgres: PITR backups, encryption at rest, connection via IAM auth (RDS IAM)
