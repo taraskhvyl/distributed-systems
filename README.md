@@ -52,7 +52,8 @@ flowchart LR
 ```
 
 api and storage are drawn on the edge network but also join the data network. sse-gateway
-joins only a third network, `sse`, with redis and lgtm: it can't reach Kafka or Postgres.
+joins only a third network, `sse`, with redis and lgtm: it can't reach Kafka or Postgres. The gateway joins a tiny `telemetry` network with lgtm
+only, to export its spans.
 
 **Nothing but the gateway's port 443 is exposed to your host.** The gateway cannot even
 reach the database, Kafka, or Redis — it only talks to `api`, `sse-gateway` (one path),

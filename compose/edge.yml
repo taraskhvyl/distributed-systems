@@ -12,6 +12,8 @@ services:
       ENVOY_UID: "0"
     networks:
       edge: {}
+      # Span export only (OTLP to lgtm); the gateway still can't reach data.
+      telemetry: {}
       # The public host names resolve to the gateway only inside this network, so k6
       # reaches it directly with its own IP instead of the host's shared one.
       loadtest:

@@ -2,7 +2,7 @@
 
 ## Bird's-eye view
 
-Three tiers, three networks, one exposed port.
+Three tiers, one exposed port, a few small networks that only exist to limit who can reach what.
 
 <!-- Same diagram as in README.md: keep both in sync. -->
 ```mermaid
@@ -54,9 +54,12 @@ A third network, **sse**, holds only `sse-gateway`, `redis` and `lgtm`: the gate
 back side, so the one other internet-facing service never shares a network with Kafka or
 Postgres.
 
+A fourth, **telemetry**, holds only `gateway` and `lgtm`: the edge exports its spans (OTLP gRPC
+:4317) without a path to redis, kafka or postgres.
+
 | container   | edge | data | sse | can be reached by              | can reach                       |
 |-------------|------|------|-----|--------------------------------|---------------------------------|
-| gateway     | ✔    | ✖    | ✖   | internet (host :443 only)      | api, sse-gateway, keycloak, storage |
+| gateway     | ✔    | ✖    | ✖   | internet (host :443 only)      | api, sse-gateway, keycloak, storage; lgtm (spans only, via `telemetry`) |
 | keycloak    | ✔    | ✖    | ✖   | gateway (proxy + JWKS), api, sse-gateway (JWKS) | (nothing it needs)              |
 | api         | ✔    | ✔    | ✖   | gateway (public), internal     | keycloak, postgres, redis, kafka, storage |
 | storage     | ✔    | ✔    | ✖   | gateway (S3 endpoint), internal| (nothing it needs)              |
@@ -220,7 +223,7 @@ Explore → Tempo at http://127.0.0.1:3000. A like is one trace:
 
 ```mermaid
 flowchart TD
-  B["browser<br/>apps/web/src/adapters/traceparent.ts mints traceparent"] -- "traceparent header" --> G["gateway (Envoy)<br/>passes header, no span yet"]
+  B["browser<br/>apps/web/src/adapters/traceparent.ts mints traceparent"] -- "traceparent header" --> G["gateway (Envoy)<br/>span: ingress, continues the header"]
   G --> R["api: PUT /v1/files/:id/like<br/>pg queries → COMMIT"]
   R -- "outbox_events.traceparent<br/>(same transaction)" --> O["api: outbox publish<br/>gap = outbox.delay_ms"]
   O --> K["api: send file-events"]
@@ -237,7 +240,7 @@ How the context crosses each hop:
 
 | hop | carrier | who does it |
 |-----|---------|-------------|
-| browser → api | `traceparent` HTTP header (CORS must allow it) | `apps/web/src/adapters/http.ts`, http instrumentation |
+| browser → gateway → api | `traceparent` HTTP header (CORS must allow it); Envoy continues it and writes its own child span's context into the upstream request | `apps/web/src/adapters/http.ts`; Envoy `tracing` + router `start_child_span: true` (`infra/gateway/envoy.yaml`), http instrumentation |
 | request → relay | `outbox_events.traceparent` column | `insertOutboxEvent` / `publishRow` (by hand) |
 | relay/processor → Kafka → consumer | `traceparent` Kafka header | kafkajs / confluent-kafka instrumentation |
 | Kafka → processor handler | header extracted by hand | `apps/processor/src/kafka_loop.py` (the auto span only *links*) |

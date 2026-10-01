@@ -32,6 +32,20 @@ static_resources:
                 # We are the edge: the TCP peer is the client, so trust it (not an incoming
                 # X-Forwarded-For) and set X-Forwarded-For / -Proto for the services.
                 use_remote_address: true
+                # The edge shows up in Tempo as service "gateway". Envoy continues the
+                # client's `traceparent` (the browser starts the trace) and passes it on, so
+                # the api span becomes a child of the gateway span.
+                tracing:
+                  # ponytail: every request is traced, fine for a lab; sample 1-10% under real load.
+                  random_sampling: { value: 100 }
+                  provider:
+                    name: envoy.tracers.opentelemetry
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                      service_name: gateway
+                      grpc_service:
+                        envoy_grpc: { cluster_name: lgtm-otlp }
+                        timeout: 1s
                 # Envoy's own 429s (rate-limit service) carry no Retry-After, and clients back off
                 # by it. Every edge limit is a one-second window (infra/ratelimit/config.yaml), so
                 # "1" is exact. Applies to local replies only; the api's 429 keeps its own value.
@@ -125,6 +139,10 @@ static_resources:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                      # Without this Envoy records its own span but does NOT write `traceparent`
+                      # into the upstream request, so the api starts a separate trace. With it,
+                      # each upstream call is a child span and its context is injected.
+                      start_child_span: true
                 route_config:
                   virtual_hosts:
                     - name: app
@@ -291,6 +309,17 @@ static_resources:
       load_assignment:
         cluster_name: web
         endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: web, port_value: 80 } } } }] }]
+    # Trace export (OTLP gRPC) to lgtm, over the `telemetry` network (gateway + lgtm only).
+    # Telemetry must never block traffic: if lgtm is down, spans are dropped.
+    - name: lgtm-otlp
+      type: STRICT_DNS
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config: { http2_protocol_options: {} }
+      load_assignment:
+        cluster_name: lgtm-otlp
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: lgtm, port_value: 4317 } } } }] }]
     # The global rate-limit service speaks gRPC, so this one cluster needs HTTP/2.
     - name: ratelimit
       type: STRICT_DNS

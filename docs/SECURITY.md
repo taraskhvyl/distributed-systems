@@ -215,6 +215,11 @@ JSON are demo seeds — production uses pre-hashed passwords or an external IdP.
 
 ## Trace context from clients
 
+The gateway (Envoy) now traces every request (`infra/gateway/envoy.yaml`, 100% sampling) and
+continues the client's `traceparent`. It reaches `lgtm` over its own `telemetry` network
+(gateway + lgtm only), so an internet-facing process still has no path to Kafka, Postgres or Redis.
+It does however get a path to an unauthenticated OTLP receiver, as the sse-gateway does.
+
 The api accepts the browser's `traceparent` header (the trace starts in the browser), so a
 client chooses its own trace id and the "sampled" flag. Risks: a client can force every
 request to be recorded (telemetry cost, a DoS lever) or reuse another trace's id to inject

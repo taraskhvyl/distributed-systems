@@ -280,6 +280,12 @@ Follow-ups found in 2 (not scheduled):
     braces, `{./apps/x}...`, or it selects only the app and its workspace deps never build.
 - [ ] **Envoy resilience**: per-route timeouts, `retry_policy` (idempotent GETs only), outlier
   detection per upstream, Envoy emits its own spans (the edge shows up in Tempo)
+  - [x] Envoy spans: OTLP gRPC to `lgtm:4317` over a new `telemetry` network (gateway + lgtm
+    only). Found on the way: with only a `tracing:` block Envoy records its own span but
+    does **not** inject `traceparent` upstream, so the api started a separate trace (the
+    api log's `trace_id` differed from the gateway's). `start_child_span: true` on the router
+    fixes it: one trace `gateway ingress → ratelimit ×2 → router api egress → api GET /v1/feed`.
+    The service graph's `user → api` edge is replaced by `gateway`.
   - Motivation: Run 4 kill test, 88 × 503 sent to the dead api replica before STRICT_DNS
     dropped it (no retry, no outlier detection). Re-run the kill under k6 and compare.
   - Prediction: _

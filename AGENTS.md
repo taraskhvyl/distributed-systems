@@ -154,7 +154,8 @@ Top level: `apps/` (deployed), `packages/` (shared libs), `infra/` (third-party 
 
 - Delivery is at-least-once everywhere. Every consumer must stay idempotent.
 - The processor DB role only has `SELECT, UPDATE` on `files`. It cannot write the outbox.
-- Networks: the gateway is on `edge` only and cannot reach postgres/kafka/redis. Keep it that way.
+- Networks: the gateway is on `edge` (+ `telemetry`, shared only with lgtm for span export) and cannot
+  reach postgres/kafka/redis. Keep it that way.
   (`ratelimit` bridges edge and data to reach Redis; the gateway only talks gRPC to it.)
 - Gateway config is a single-file bind mount: after editing `envoy.yaml`, run
   `docker compose restart gateway` (an editor's save replaces the inode). Validate first:
