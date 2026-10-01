@@ -179,8 +179,8 @@ Follow-ups found in 2 (not scheduled):
     not db capacity. The "Hot key" item below showed up early — it filled the pool before
     its own experiment. Where the bottleneck moves next: `API_REPLICAS=3` (3 × 10 conns,
     the hot row stays until sharded counters).
-- [ ] **Swap the gateway: nginx → Envoy.** Question: what does a real API gateway add over a
-  reverse proxy, and what does it cost?
+- [x] **Swap the gateway: nginx → Envoy.** Question: what does a real API gateway add over a
+  reverse proxy, and what does it cost? (Resilience features split out below.)
   - [x] Parity (`make demo` passes): TLS + HTTP/2, host routing (app/api/auth/s3), SSE
     streamed with `timeout: 0s`, security headers/CSP, `traceparent` passthrough. `apps/web`
     is served by a stock nginx `web` container (Envoy doesn't serve files).
@@ -192,9 +192,9 @@ Follow-ups found in 2 (not scheduled):
     Side find: the k6 smoke run made 50 users follow alice and broke `make demo`'s exact
     assertions; the load test now uses its own author (`loadtest-01`).
   - Then the gateway features: `jwt_authn` validates Keycloak JWTs at the edge (bad tokens
-    never reach a service); per-user limit keyed on the JWT `sub` at the edge; timeouts,
-    retries, outlier detection per upstream; Envoy emits its own spans (the edge shows up in
-    Tempo).
+    never reach a service); per-user limit keyed on the JWT `sub` at the edge (both done, below).
+    Timeouts, retries, outlier detection and Envoy's own spans: see "Envoy resilience" after
+    the `--scale` items.
   - [x] ADR: keep JWT checks in the services too (defense in depth) or trust the edge?
     → both (`docs/adr/0003-jwt-verified-at-edge-and-in-services.md`).
   - Prediction: _a bad token gets its 401 from Envoy and the api sees nothing; valid
@@ -278,6 +278,11 @@ Follow-ups found in 2 (not scheduled):
     services). Renaming a field now fails both builds (5 errors) instead of compiling and
     silently delivering nothing. Side find: the Dockerfile's `--filter "./apps/x..."` needs
     braces, `{./apps/x}...`, or it selects only the app and its workspace deps never build.
+- [ ] **Envoy resilience**: per-route timeouts, `retry_policy` (idempotent GETs only), outlier
+  detection per upstream, Envoy emits its own spans (the edge shows up in Tempo)
+  - Motivation: Run 4 kill test, 88 × 503 sent to the dead api replica before STRICT_DNS
+    dropped it (no retry, no outlier detection). Re-run the kill under k6 and compare.
+  - Prediction: _
 - [ ] **Feed at scale**: seed thousands of follows; fan-out-on-read p99 blows up → fan-out on write (`feed-writer` consumer, Redis sorted set per user) → one user with 50k followers spikes lag → hybrid
   - Prediction: _
 - [ ] **Hot key**: hammer likes on one viral file; row-lock contention caps throughput regardless of replicas → sharded counters → Redis `INCR` + periodic flush (exact vs approximate)

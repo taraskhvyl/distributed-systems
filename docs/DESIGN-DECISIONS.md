@@ -164,6 +164,48 @@ CLI demo uses the password grant while the browser app uses auth-code + PKCE (ne
 answer), and why logout/revocation is JWTs' weak spot (short TTL + refresh rotation is
 the standard answer).
 
+## Q: What does an API gateway (Envoy) add over a reverse proxy (nginx), and what does it cost?
+
+**A:** A reverse proxy forwards bytes by host and path. A gateway also makes **decisions
+about each request using shared state or a verified identity**, before an upstream sees it
+(`infra/gateway/envoy.yaml`). Four things we got that stock nginx didn't give us:
+
+1. **Edge JWT check** (`jwt_authn`): bad tokens get a 401 with `upstream: null`; the api never
+   sees them (see the next answer for why services still verify).
+2. **Rate limits keyed on a client, not a route.** Envoy's built-in `local_ratelimit` is one
+   bucket per route per process, so it can't say "10/s per user". Per-client limits need
+   the global `ratelimit` service (`envoyproxy/ratelimit` + Redis). Per-IP runs before
+   `jwt_authn` (stage 0), per-user after it (stage 1, it reads `sub` from the verified token).
+3. **Per-upstream traffic policy**: timeouts, retries, outlier detection. Not configured
+   yet, and it shows: after `docker kill` of one api replica, Envoy sent 88 × 503 to it
+   until STRICT_DNS dropped it (roadmap: "Envoy resilience").
+4. **Its own telemetry**: structured access log with a `details` field that names *why*
+   Envoy answered itself (`jwt_authn_access_denied{Jwt_is_missing}`, `RL`).
+
+**Cost**, each one measured or hit while building it:
+- **Rate limiting got a new dependency.** The global limiter is a service plus Redis, and
+  its counters are fixed one-second windows (no token bucket, no `Retry-After`). Per-IP and
+  per-user limits now fail open on the *same* Redis; with nginx the per-IP counters lived in
+  the proxy's own memory, a separate failure domain.
+- **Envoy's own replies are invisible to the browser.** Its 401 and 429 had no CORS
+  headers, so the page saw `Failed to fetch` instead of a status. Fixed for the whole class
+  with `ADD_IF_ABSENT` CORS headers on the api host, so services still own CORS.
+- **JWT at the edge is not a latency cost.** Predicted slower, measured 13.8 vs 14.1–15.4 ms
+  p50 (noise): checking a signature against a cached key takes microseconds. The cost of
+  JWT auth is fetching the keys, which is why JWKS is cached for 10 min and Keycloak is
+  off the hot path.
+- **Config is not a file you can template.** Envoy can't read env vars, and the config is
+  one static bind-mounted file, so an edit needs `docker compose restart gateway`
+  (ADR 0006: the xDS-files spike was rejected).
+- **It doesn't serve files.** The web app moved to a stock nginx `web` container behind it.
+
+**When not to bother:** one service, no per-client limits, no edge auth. Then nginx or the
+cloud load balancer is enough, and a gateway is one more thing that can be down.
+
+See it: `curl -sk -H 'Authorization: Bearer x.y.z' https://api.localhost/v1/files`, then
+`docker compose logs gateway | grep 401` (`upstream: null`, reason in `details`). Burst
+15 writes as one user: 5 succeed, 5 get a 429 from the edge and 5 from the api (measured).
+
 ## Q: The gateway validates JWTs. Why do the services validate them again?
 
 **A:** Because the two checks do different jobs. The edge (Envoy `jwt_authn`) is a
