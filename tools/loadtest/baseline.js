@@ -20,7 +20,7 @@ const LOADTEST_USERNAMES = Array.from({ length: LOADTEST_USER_COUNT }, (_, i) =>
 const SAMPLE_PNG = open('/samples/sample.png', 'b')
 
 const PEAK_VUS = Number(__ENV.VUS ?? 20)
-const FEED_SHARE = 0.7
+const FEED_SHARE = Number(__ENV.FEED_SHARE ?? 0.7) // 1 = feed reads only (experiment-feed-scale.sh)
 const LIKE_SHARE = 0.2 // the rest (10%) are uploads
 const THINK_TIME_S = 1
 const READY_TIMEOUT_S = 30
